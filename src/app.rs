@@ -216,7 +216,8 @@ impl eframe::App for TemplateApp {
                     if self.error_show{
                         Modal::new(Id::new("IO Error")).show(ui.ctx(), |ui| {
                             ui.set_width(200.0);
-                            ui.heading("Unable to open file");
+                            ui.heading("Error");
+                            ui.label(&self.error_value);
 
                            ui.add_space(32.0);
 
@@ -259,7 +260,7 @@ impl eframe::App for TemplateApp {
                         self.playbin = Some(pb);
                         } else { //modal code from demo https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/modals.rs
                             ui.label(format!("help"));
-                            self.error_value = "path.exists() returned false".to_owned();
+                            self.error_value = "path.exists() returned false (File not found) : In the future, this shouldn't be an error message but should gray out the song and skip it.".to_owned();
                             self.error_show = true;
                         }
 
@@ -459,8 +460,10 @@ impl eframe::App for TemplateApp {
                                         });
                                     });
                                     header.col(|ui| { // todo: why doesnt this show up
-                                        ui.add_space(30.0);
-                                        ui.label("nyaaaaaaaa");
+                                        ui.horizontal(|ui|{
+                                            ui.add_space(30.0);
+                                            ui.label("nyaaaaaaaa");
+                                        });
                                     });
                                     header.col(|ui| {
                                         // todo: shouldn't be part of the table.
