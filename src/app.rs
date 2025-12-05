@@ -1,6 +1,9 @@
 //use std::collections::{binary_heap::{IntoIter, Iter}, hash_map::Iter};
 use egui::ScrollArea;
 use egui_extras::{TableBuilder,Column};
+use gstreamer::prelude::*; // $env:PKG_CONFIG_PATH="C:\Program Files\gstreamer\1.0\msvc_x86_64\lib\pkgconfig"
+use gstreamer::{Pipeline, Message};
+
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
@@ -22,6 +25,9 @@ pub struct TemplateApp {
 
     #[serde(skip)]
     col2_width: Option<f32>,
+
+    #[serde(skip)]
+    playbin: Option<gstreamer::Element>,
 }
 
 impl Default for TemplateApp {
@@ -35,23 +41,7 @@ impl Default for TemplateApp {
             row_height: None,
             col1_width: None,
             col2_width: None,
-        }
-    }
-}
-
-impl TemplateApp {
-    /// Called once before the first frame.
-
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // This is also where you can customize the look and feel of egui using
-        // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
-
-        // Load previous app state (if any).
-        // Note that you must enable the `persistence` feature for this to work.
-        if let Some(storage) = cc.storage {
-            eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default()
-        } else {
-            Default::default()
+            playbin: None,
         }
     }
 }
@@ -100,15 +90,37 @@ impl SongCardData { //i must be for real this section is written by ai. im Sorry
     }
 }
 
+impl TemplateApp {
+    /// Called once before the first frame.
+
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // This is also where you can customize the look and feel of egui using
+        // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
+
+        // Load previous app state (if any).
+        // Note that you must enable the `persistence` feature for this to work.
+        if let Some(storage) = cc.storage {
+            eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default()
+        } else {
+            Default::default()
+        }
+    }
+}
+
 //--(^人^)---(^人^)--//
 //   Main app logic  //
 //--(^人^)---(^人^)--//
+
+    //（︶^︶）（︶^︶）//
+    //    UI STUFF    //
+
 impl eframe::App for TemplateApp {
+
     /// Called by the framework to save state before shutdown.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, self);
     } //todo: deciper how the example app does this stuff; how do you add something to be saved on reboot?
-
+    
     /// Called each time the UI needs repainting, which may be many times per second.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Put your widgets into a `SidePanel`, `TopBottomPanel`, `CentralPanel`, `Window` or `Area`.
@@ -134,20 +146,78 @@ impl eframe::App for TemplateApp {
 
         //--\(￣︶￣*\))---\(￣︶￣*\))---\(￣︶￣*\))---\(￣︶￣*\))--//
         //    Bottom bar to display track info and track controls    //
-        //--\(￣︶￣*\))---\(￣︶￣*\))---\(￣︶￣*\))---\(￣︶￣*\))--//
+
         egui::TopBottomPanel::bottom("status") // todo: make this resizable properly.
         .resizable(true)
         .min_height(50.0)
         .show(ctx, |ui|{
             ScrollArea::horizontal().show(ui,|ui|{
                 ui.set_min_height(ui.available_height());
-                ui.label("Status hereeee!!!");
+                ui.horizontal_centered(|ui|{
+                    if ui.button("Start gstream").clicked(){
+                        // gstream logic
+                        gstreamer::init().unwrap();
+
+                        let pb = gstreamer::ElementFactory::make("playbin")
+                            .build()
+                            .expect("Could not create playbin"); //TODO: learn what the playbin is, im just copying from example code
+
+                        // Set the URI of the audio file
+                        // Use "file://" prefix and an absolute path
+                        let uri = "file:///E:/Programs/miniQuartz/miniQuartz/assets/xXHANA VENOMXx - 920LONDON - 02 iFeelLikeYouWould.flac"; // fui: I think uri's are better? Other libraries required uri's to do dynamic file selection.
+                        pb.set_property("uri", uri);
+
+                        // Start playback
+                        pb
+                            .set_state(gstreamer::State::Playing)
+                            .expect("Unable to set the pipeline to the Playing state");
+
+                        self.playbin = Some(pb);
+
+                        
+                        if let Some(playbin) = &self.playbin{
+                            let bus = playbin.bus().unwrap();
+                                for msg in bus.iter_timed(gstreamer::ClockTime::from_mseconds(0)){ // Every frame check if it's updated. Todo: multithread this.
+                                    match msg.view(){
+                                        gstreamer::MessageView::Eos(..) => {
+                                            playbin
+                                                .set_state(gstreamer::State::Null)
+                                                .expect("Unable to set the pipeline to the Null state (EOS)");
+                                            break;
+                                        }
+                                        gstreamer::MessageView::Error(err) => {
+                                            playbin
+                                                .set_state(gstreamer::State::Null)
+                                                .expect("Unable to set the pipeline to the Null state (ERR)");
+                                            break;
+                                        }
+                                    _ => {}
+                                    }
+                                }
+                        }
+                    }
+                    if ui.button("Play/Pause").clicked(){
+                        if let Some(playbin) = &self.playbin {
+                            let (_success, current, _pending) = playbin.state(gstreamer::ClockTime::NONE);
+                            if current == gstreamer::State::Playing{
+                                playbin
+                                    .set_state(gstreamer::State::Paused)
+                                    .expect("Unable to pause");
+                            } else if current == gstreamer::State::Paused {
+                                playbin
+                                    .set_state(gstreamer::State::Playing)
+                                    .expect("Unable to play");
+                            }
+                            
+                        }
+                    }
+                });
             });
         });
 
         //--(*￣3￣)╭----(*￣3￣)╭---(*￣3￣)╭----(*￣3￣)╭--//
         // Side panel to display playlists and app controls //
-        //--(*￣3￣)╭----(*￣3￣)╭---(*￣3￣)╭----(*￣3￣)╭--//
+
         egui::SidePanel::left("playlists")
         .resizable(true)
         .min_width(30.0)
@@ -164,7 +234,7 @@ impl eframe::App for TemplateApp {
 
         //--◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐-//
         //   Central pain to display: Playlist contents, album contents, artist pages   //
-        //--◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐-//
+
         egui::CentralPanel::default().show(ctx, |ui| { // central panel has to be rendered after other panels
             ui.heading("Playlist Name Here");
             let available_width = ui.available_width(); // todo: if there becomes more things that only need to happen on window resize, should create a check for if window resized.
@@ -174,7 +244,7 @@ impl eframe::App for TemplateApp {
             let last_column_width = available_width-(20.0+col2_width+col_time_width); // proper row height: it feels wrong to be setting this every frame. todo: optimize that
                 TableBuilder::new(ui)
                             .column(Column::exact(20.0))
-                            .column(Column::auto().resizable(true).at_least(50.0)) //todo: remember this on program restart
+                            .column(Column::auto().resizable(true).at_least(50.0).at_most(available_width-col_time_width-50.0)) //todo: remember this on program restart
                             .column(Column::exact(last_column_width))
                             .column(Column::exact(col_time_width))
                             .header(20.0, |mut header| {
@@ -295,5 +365,6 @@ impl eframe::App for TemplateApp {
                 egui::warn_if_debug_build(ui); // this was in the example thing and idk if its needed or if theres a benefit to removing it
             });
         });
+        //ctx.request_repaint(); // Keeps UI constantly updating. This might be *really bad* for performance, maybe theres some way to control the FPS
     }
 }
