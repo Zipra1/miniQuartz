@@ -23,11 +23,19 @@ pub struct TemplateApp {
     #[serde(skip)]
     col1_width: Option<f32>,
 
-    #[serde(skip)]
     col2_width: Option<f32>,
 
     #[serde(skip)]
     playbin: Option<gstreamer::Element>,
+
+    #[serde(skip)]
+    position_ms: u64,
+
+    #[serde(skip)]
+    duration_ms: u64,
+
+    #[serde(skip)]
+    last_update: std::time::Instant,
 }
 
 impl Default for TemplateApp {
@@ -42,6 +50,9 @@ impl Default for TemplateApp {
             col1_width: None,
             col2_width: None,
             playbin: None,
+            position_ms: 0,
+            duration_ms: 0,
+            last_update: std::time::Instant::now(),
         }
     }
 }
@@ -129,16 +140,16 @@ impl eframe::App for TemplateApp {
             // The top panel is often a good place for a menu bar:
 
             egui::MenuBar::new().ui(ui, |ui| {
-                // NOTE: no File->Quit on web pages!
-                let is_web = cfg!(target_arch = "wasm32");
-                if !is_web {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
                     ui.menu_button("File", |ui| {
                         if ui.button("Quit").clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     });
                     ui.add_space(16.0);
-                }
+                });
+                // NOTE: no File->Quit on web pages!
+                    
 
                 egui::widgets::global_theme_preference_buttons(ui);
             });
@@ -154,7 +165,37 @@ impl eframe::App for TemplateApp {
             ScrollArea::horizontal().show(ui,|ui|{
                 ui.set_min_height(ui.available_height());
                 ui.horizontal_centered(|ui|{
-                    if ui.button("Start gstream").clicked(){
+                    if let Some(playbin) = &self.playbin{
+
+                            // 
+                            // Seeking
+                            let duration = self.duration_ms.max(1) as f32;
+                            let mut pos = self.position_ms as f32;
+
+                            let response = ui.add(
+                                egui::Slider::new(&mut pos, 0.0..=duration).text("Position")
+                            );
+                            if response.changed(){
+                                let seek_to = gstreamer::ClockTime::from_mseconds(pos as u64);
+
+                                playbin
+                                    .seek_simple(gstreamer::SeekFlags::FLUSH | gstreamer::SeekFlags::KEY_UNIT,seek_to,)// Wow... Gstream really just has that!
+                                    .expect("Seek failed");
+                            }
+
+                            if self.last_update.elapsed().as_millis() > 100 {
+                                // Set position
+                                if let Some(pos) = playbin.query_position::<gstreamer::ClockTime>(){
+                                    self.position_ms = pos.mseconds();
+                                }
+                                // Set duration Todo: This only needs to be done when starting playback. Not every frame.
+                                if let Some(dur) = playbin.query_duration::<gstreamer::ClockTime>() {
+                                    self.duration_ms = dur.mseconds();
+                                }
+                                self.last_update = std::time::Instant::now();
+                            }
+                    }
+                    if ui.button("Start gstream").clicked(){ // This should be considered a debug button. Gstream should be handled more elegantly than this.
                         // gstream logic
                         gstreamer::init().unwrap();
 
@@ -170,32 +211,44 @@ impl eframe::App for TemplateApp {
                         // Start playback
                         pb
                             .set_state(gstreamer::State::Playing)
-                            .expect("Unable to set the pipeline to the Playing state");
+                            .expect("Unable to set the pipeline to the Playing state"); // TODO: remove all these expects and replace with proper error handling. they're probably bad!
 
                         self.playbin = Some(pb);
 
-                        
                         if let Some(playbin) = &self.playbin{
-                            let bus = playbin.bus().unwrap();
-                                for msg in bus.iter_timed(gstreamer::ClockTime::from_mseconds(0)){ // Every frame check if it's updated. Todo: multithread this.
-                                    match msg.view(){
-                                        gstreamer::MessageView::Eos(..) => {
-                                            playbin
-                                                .set_state(gstreamer::State::Null)
-                                                .expect("Unable to set the pipeline to the Null state (EOS)");
-                                            break;
-                                        }
-                                        gstreamer::MessageView::Error(err) => {
-                                            playbin
-                                                .set_state(gstreamer::State::Null)
-                                                .expect("Unable to set the pipeline to the Null state (ERR)");
-                                            break;
-                                        }
-                                    _ => {}
-                                    }
+                            if self.last_update.elapsed().as_millis() > 100 {
+                                // Set position
+                                if let Some(pos) = playbin.query_position::<gstreamer::ClockTime>(){
+                                    self.position_ms = pos.mseconds();
                                 }
+                                // Set duration Todo: This only needs to be done when starting playback. Not every frame.
+                                if let Some(dur) = playbin.query_duration::<gstreamer::ClockTime>() {
+                                    self.duration_ms = dur.mseconds();
+                                }
+                                self.last_update = std::time::Instant::now();
+                            }
+
+                            let bus = playbin.bus().unwrap();
+                            for msg in bus.iter_timed(gstreamer::ClockTime::from_mseconds(0)){ // Every frame get bus info. Todo: Put this on a separate thread.
+                                match msg.view(){
+                                    gstreamer::MessageView::Eos(..) => {
+                                        playbin
+                                            .set_state(gstreamer::State::Null)
+                                            .expect("Unable to set the pipeline to the Null state (EOS)");
+                                        break;
+                                    }
+                                    gstreamer::MessageView::Error(err) => {
+                                        playbin //ui.label(format!("FPS: {:.1}", fps));
+                                            .set_state(gstreamer::State::Null)
+                                            .expect(&format!("Unable to set the pipeline to the Null state (ERR) {}", err));
+                                        break;
+                                    }
+                                _ => {}
+                                }
+                            }
                         }
                     }
+                    
                     if ui.button("Play/Pause").clicked(){
                         if let Some(playbin) = &self.playbin {
                             let (_success, current, _pending) = playbin.state(gstreamer::ClockTime::NONE);
@@ -236,18 +289,25 @@ impl eframe::App for TemplateApp {
         //   Central pain to display: Playlist contents, album contents, artist pages   //
 
         egui::CentralPanel::default().show(ctx, |ui| { // central panel has to be rendered after other panels
-            ui.heading("Playlist Name Here");
+            ui.horizontal(|ui|{
+                ui.label(
+                    egui::RichText::new("Playlist name here")
+                        .size(32.0)
+                        .strong()
+                );
+            });
             let available_width = ui.available_width(); // todo: if there becomes more things that only need to happen on window resize, should create a check for if window resized.
             let col_time_width= 130.0; // defined here bc its used in many places and itd be annoying to change them both every time
             let col1_width = self.col1_width.unwrap_or(30.0);
-            let col2_width = self.col2_width.unwrap_or(30.0);
+            let col2_width = self.col2_width.unwrap_or(100.0);
             let last_column_width = available_width-(20.0+col2_width+col_time_width); // proper row height: it feels wrong to be setting this every frame. todo: optimize that
-                TableBuilder::new(ui)
+            ui.group(|ui|{
+                        TableBuilder::new(ui)
                             .column(Column::exact(20.0))
-                            .column(Column::auto().resizable(true).at_least(50.0).at_most(available_width-col_time_width-50.0)) //todo: remember this on program restart
+                            .column(Column::initial(col2_width).resizable(true).at_least(50.0).at_most(available_width-col_time_width-50.0)) //todo: remember this on program restart
                             .column(Column::exact(last_column_width))
                             .column(Column::exact(col_time_width))
-                            .header(20.0, |mut header| {
+                            .header(20.0, |mut header| { // this is the top table
                                 header.col(|ui|{
                                     ui.vertical_centered(|ui|{
                                         ui.heading("#");
@@ -273,16 +333,18 @@ impl eframe::App for TemplateApp {
                             })
                             .body(|mut body| {
                                 body.row(0.0, |mut row| {
-                                    row.col(|ui|{
+                                    row.col(|_ui|{
                                     });
-                                    row.col(|ui|{ // urghh the grabby bits are actually attached to these so u cant remove these empty cells
+                                    row.col(|_ui|{ // urghh the grabby bits are actually attached to these so u cant remove these empty cells
                                     });
-                                    row.col(|ui|{
+                                    row.col(|_ui|{
                                     });
-                                    row.col(|ui|{
+                                    row.col(|_ui|{
                                     });
                                 });
                             });
+            });
+                
 
             ScrollArea::vertical()
             //.max_width(available_width-5.0)
@@ -331,16 +393,15 @@ impl eframe::App for TemplateApp {
                                         } else {
                                             ui.label("img not found"); // TODO: "no album" image instead of text
                                         }
-                                        ui.vertical_centered(|ui|{ // song & artist names
+                                        ui.vertical(|ui|{ // song & artist names
                                             ui.label(egui::RichText::new(format!("Title: {}", song.title)).strong());
                                             ui.label(format!("Artist {}", song.artist));
                                         });
                                     });
                                 });
                                 header.col(|ui|{
-                                    ui.vertical_centered(|ui|{
-                                        ui.label("nyaaaaaaaa");
-                                    });
+                                    ui.add_space(30.0);
+                                    ui.label("nyaaaaaaaa");
                                 });
                                 header.col(|ui|{ // todo: shouldn't be part of the table.
                                     ui.vertical_centered(|ui|{
@@ -365,6 +426,6 @@ impl eframe::App for TemplateApp {
                 egui::warn_if_debug_build(ui); // this was in the example thing and idk if its needed or if theres a benefit to removing it
             });
         });
-        //ctx.request_repaint(); // Keeps UI constantly updating. This might be *really bad* for performance, maybe theres some way to control the FPS
+        ctx.request_repaint_after(std::time::Duration::from_millis(300)); // Updates UI every 300ms, so that the duration bar moves smoothly.
     }
 }
