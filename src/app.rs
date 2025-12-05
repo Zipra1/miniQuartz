@@ -1,8 +1,9 @@
 //use std::collections::{binary_heap::{IntoIter, Iter}, hash_map::Iter};
-use egui::ScrollArea;
-use egui_extras::{TableBuilder,Column};
+use egui::{Id, Modal, ScrollArea};
+use egui_extras::{Column, TableBuilder};
 use gstreamer::prelude::*; // $env:PKG_CONFIG_PATH="C:\Program Files\gstreamer\1.0\msvc_x86_64\lib\pkgconfig"
-use gstreamer::{Pipeline, Message};
+use gstreamer::{Message, Pipeline};
+use std::path::Path;
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -58,10 +59,10 @@ impl Default for TemplateApp {
 }
 
 struct Songs {
-    articles: Vec<SongCardData>
+    articles: Vec<SongCardData>,
 }
 
-struct SongCardData{
+struct SongCardData {
     title: String,
     artist: String,
     length: String,
@@ -69,31 +70,33 @@ struct SongCardData{
     texture: Option<egui::TextureHandle>,
 }
 
-impl Songs{
-    fn new() -> Songs{
-        let iter = (0..8000).map(|a| SongCardData{ // todo: replace with file searching
+impl Songs {
+    fn new() -> Songs {
+        let iter = (0..8000).map(|a| SongCardData {
+            // todo: replace with file searching
             title: (a).to_string(),
-            artist: (a+1).to_string(),
-            length: (a*2).to_string(),
+            artist: (a + 1).to_string(),
+            length: (a * 2).to_string(),
             cover_path: "assets/icon-256.png".to_owned(),
             texture: None,
         });
-        Songs{
-            articles: Vec::from_iter(iter)
+        Songs {
+            articles: Vec::from_iter(iter),
         }
     }
 }
 
-impl SongCardData { //i must be for real this section is written by ai. im Sorry. but im fuck at rust,, this should be rewritten later, though.
+impl SongCardData {
+    //i must be for real this section is written by ai. im Sorry. but im fuck at rust,, this should be rewritten later, though.
     fn load_texture_if_needed(&mut self, ctx: &egui::Context) {
         if self.texture.is_none() {
             if let Ok(image) = image::open(&self.cover_path) {
                 let image = image.to_rgba8();
                 let size = [image.width() as usize, image.height() as usize];
                 let texture = ctx.load_texture(
-                    self.cover_path.clone(), 
+                    self.cover_path.clone(),
                     egui::ColorImage::from_rgba_unmultiplied(size, &image),
-                    Default::default()
+                    Default::default(),
                 );
                 self.texture = Some(texture);
             }
@@ -122,16 +125,15 @@ impl TemplateApp {
 //   Main app logic  //
 //--(^人^)---(^人^)--//
 
-    //（︶^︶）（︶^︶）//
-    //    UI STUFF    //
+//（︶^︶）（︶^︶）//
+//    UI STUFF    //
 
 impl eframe::App for TemplateApp {
-
     /// Called by the framework to save state before shutdown.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, self);
     } //todo: deciper how the example app does this stuff; how do you add something to be saved on reboot?
-    
+
     /// Called each time the UI needs repainting, which may be many times per second.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Put your widgets into a `SidePanel`, `TopBottomPanel`, `CentralPanel`, `Window` or `Area`.
@@ -149,7 +151,6 @@ impl eframe::App for TemplateApp {
                     ui.add_space(16.0);
                 });
                 // NOTE: no File->Quit on web pages!
-                    
 
                 egui::widgets::global_theme_preference_buttons(ui);
             });
@@ -167,7 +168,7 @@ impl eframe::App for TemplateApp {
                 ui.horizontal_centered(|ui|{
                     if let Some(playbin) = &self.playbin{
 
-                            // 
+                            //
                             // Seeking
                             let duration = self.duration_ms.max(1) as f32;
                             let mut pos = self.position_ms as f32;
@@ -206,15 +207,39 @@ impl eframe::App for TemplateApp {
                         // Set the URI of the audio file
                         // Use "file://" prefix and an absolute path
                         let uri = "file:///E:/Programs/miniQuartz/miniQuartz/assets/xXHANA VENOMXx - 920LONDON - 02 iFeelLikeYouWould.flac"; // fui: I think uri's are better? Other libraries required uri's to do dynamic file selection.
+                        let path = Path::new(uri);
                         pb.set_property("uri", uri);
 
+                        // verify file
+                        if path.exists() {
                         // Start playback
                         pb
                             .set_state(gstreamer::State::Playing)
                             .expect("Unable to set the pipeline to the Playing state"); // TODO: remove all these expects and replace with proper error handling. they're probably bad!
-
                         self.playbin = Some(pb);
+                        } else { //modal code from demo https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/modals.rs
+                            Modal::new(Id::new("IO Error")).show(ui.ctx(), |ui| {
+                                           ui.set_width(200.0);
+                                           ui.heading("Unable to open file");
 
+                                           ui.add_space(32.0);
+
+                                           egui::Sides::new().show(
+                                               ui,
+                                               |_ui| {},
+                                               |ui| {
+                                                   if ui.button("aw dang").clicked() {
+                                                       ui.close();
+                                                   }
+
+                                                   if ui.button("im sorry").clicked() {
+                                                       ui.close();
+                                                   }
+                                               },
+                                           );
+                                       });
+                            ui.label(format!("help"));
+                                   }
                         if let Some(playbin) = &self.playbin{
                             if self.last_update.elapsed().as_millis() > 100 {
                                 // Set position
@@ -248,7 +273,7 @@ impl eframe::App for TemplateApp {
                             }
                         }
                     }
-                    
+
                     if ui.button("Play/Pause").clicked(){
                         if let Some(playbin) = &self.playbin {
                             let (_success, current, _pending) = playbin.state(gstreamer::ClockTime::NONE);
@@ -261,7 +286,7 @@ impl eframe::App for TemplateApp {
                                     .set_state(gstreamer::State::Playing)
                                     .expect("Unable to play");
                             }
-                            
+
                         }
                     }
                 });
@@ -272,155 +297,165 @@ impl eframe::App for TemplateApp {
         // Side panel to display playlists and app controls //
 
         egui::SidePanel::left("playlists")
-        .resizable(true)
-        .min_width(30.0)
-        .show(ctx, |ui|{
-            ui.heading("miniQuartz");
-            let fps = 1.0 / ctx.input(|i| i.stable_dt.max(0.0001)); // fps counter for extra awesome
-            ui.label(format!("FPS: {:.1}", fps));
-            ScrollArea::vertical().show(ui, |ui|{
-                ui.set_min_width(ui.available_width()); // this makes smooth resizing possible. feels kinda jank but whatever.
-                ui.label("Playlists Hereeeeeeeeeee");
+            .resizable(true)
+            .min_width(30.0)
+            .show(ctx, |ui| {
+                ui.heading("miniQuartz");
+                let fps = 1.0 / ctx.input(|i| i.stable_dt.max(0.0001)); // fps counter for extra awesome
+                ui.label(format!("FPS: {:.1}", fps));
+                ScrollArea::vertical().show(ui, |ui| {
+                    ui.set_min_width(ui.available_width()); // this makes smooth resizing possible. feels kinda jank but whatever.
+                    ui.label("Playlists Hereeeeeeeeeee");
+                });
             });
-            
-        });
 
         //--◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐---◑﹏◐-//
         //   Central pain to display: Playlist contents, album contents, artist pages   //
 
-        egui::CentralPanel::default().show(ctx, |ui| { // central panel has to be rendered after other panels
-            ui.horizontal(|ui|{
+        egui::CentralPanel::default().show(ctx, |ui| {
+            // central panel has to be rendered after other panels
+            ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("Playlist name here")
                         .size(32.0)
-                        .strong()
+                        .strong(),
                 );
             });
             let available_width = ui.available_width(); // todo: if there becomes more things that only need to happen on window resize, should create a check for if window resized.
-            let col_time_width= 130.0; // defined here bc its used in many places and itd be annoying to change them both every time
+            let col_time_width = 130.0; // defined here bc its used in many places and itd be annoying to change them both every time
             let col1_width = self.col1_width.unwrap_or(30.0);
             let col2_width = self.col2_width.unwrap_or(100.0);
-            let last_column_width = available_width-(20.0+col2_width+col_time_width); // proper row height: it feels wrong to be setting this every frame. todo: optimize that
-            ui.group(|ui|{
-                        TableBuilder::new(ui)
-                            .column(Column::exact(20.0))
-                            .column(Column::initial(col2_width).resizable(true).at_least(50.0).at_most(available_width-col_time_width-50.0)) //todo: remember this on program restart
-                            .column(Column::exact(last_column_width))
-                            .column(Column::exact(col_time_width))
-                            .header(20.0, |mut header| { // this is the top table
-                                header.col(|ui|{
-                                    ui.vertical_centered(|ui|{
-                                        ui.heading("#");
-                                    });
-                                });
-                                header.col(|ui|{
-                                    ui.vertical_centered(|ui|{
-                                        ui.heading("Name");
-                                        self.col2_width = Some(ui.available_width());
-                                    });
-                                });
-                                header.col(|ui|{
-                                    ui.vertical_centered(|ui|{
-                                        ui.heading("Album");
-                                        self.col1_width = Some(ui.available_width());
-                                    });
-                                });
-                                header.col(|ui|{
-                                    ui.vertical_centered(|ui|{
-                                        ui.heading("Time");
-                                    });
-                                });
-                            })
-                            .body(|mut body| {
-                                body.row(0.0, |mut row| {
-                                    row.col(|_ui|{
-                                    });
-                                    row.col(|_ui|{ // urghh the grabby bits are actually attached to these so u cant remove these empty cells
-                                    });
-                                    row.col(|_ui|{
-                                    });
-                                    row.col(|_ui|{
-                                    });
-                                });
+            let last_column_width = available_width - (20.0 + col2_width + col_time_width); // proper row height: it feels wrong to be setting this every frame. todo: optimize that
+            ui.group(|ui| {
+                TableBuilder::new(ui)
+                    .column(Column::exact(20.0))
+                    .column(
+                        Column::initial(col2_width)
+                            .resizable(true)
+                            .at_least(50.0)
+                            .at_most(available_width - col_time_width - 50.0),
+                    ) //todo: remember this on program restart
+                    .column(Column::exact(last_column_width))
+                    .column(Column::exact(col_time_width))
+                    .header(20.0, |mut header| {
+                        // this is the top table
+                        header.col(|ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.heading("#");
                             });
+                        });
+                        header.col(|ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.heading("Name");
+                                self.col2_width = Some(ui.available_width());
+                            });
+                        });
+                        header.col(|ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.heading("Album");
+                                self.col1_width = Some(ui.available_width());
+                            });
+                        });
+                        header.col(|ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.heading("Time");
+                            });
+                        });
+                    })
+                    .body(|mut body| {
+                        body.row(0.0, |mut row| {
+                            row.col(|_ui| {});
+                            row.col(
+                                |_ui| { // urghh the grabby bits are actually attached to these so u cant remove these empty cells
+                                },
+                            );
+                            row.col(|_ui| {});
+                            row.col(|_ui| {});
+                        });
+                    });
             });
-                
 
             ScrollArea::vertical()
-            //.max_width(available_width-5.0)
-            .show(ui,|ui|{
+                //.max_width(available_width-5.0)
+                .show(ui, |ui| {
+                    // render buffer stuff
+                    let row_height = self.row_height.unwrap_or(30.0); // proper row height: it feels wrong to be setting this every frame.
+                    let total_rows = self.songs.articles.len(); // it feels wrong to be setting this every frame. this only really needs to be set if the shown list changes.
 
-                // render buffer stuff
-                let row_height = self.row_height.unwrap_or(30.0); // proper row height: it feels wrong to be setting this every frame.
-                let total_rows = self.songs.articles.len(); // it feels wrong to be setting this every frame. this only really needs to be set if the shown list changes.
+                    let clip_rect = ui.clip_rect();
+                    let top = clip_rect.top();
+                    let bottom = clip_rect.bottom();
 
-                let clip_rect = ui.clip_rect();
-                let top = clip_rect.top();
-                let bottom= clip_rect.bottom();
+                    let mut start = ((top - ui.min_rect().top()) / row_height).floor() as usize;
+                    let mut end = ((bottom - ui.min_rect().top()) / row_height).ceil() as usize;
 
-                let mut start = ((top - ui.min_rect().top()) / row_height).floor() as usize;
-                let mut end = ((bottom - ui.min_rect().top()) / row_height).ceil() as usize;
+                    let render_buffer_size = 5; // If fast scrolling causes images not to load, increase this.
 
-                let render_buffer_size = 5; // If fast scrolling causes images not to load, increase this.
+                    start = start.saturating_sub(render_buffer_size);
+                    end = (end + render_buffer_size).min(total_rows);
 
-                start = start.saturating_sub(render_buffer_size);
-                end = (end + render_buffer_size).min(total_rows);
+                    let above_px = start as f32 * row_height;
+                    ui.add_space(above_px); // makes scroll bar look big (1/2)
 
-                let above_px = start as f32 * row_height;
-                ui.add_space(above_px); // makes scroll bar look big (1/2)
+                    for i in start..end {
+                        // Display tracks that should be displayed
+                        // no longer render buffer stuff
+                        let song = &mut self.songs.articles[i]; // Ampersand makes it read-only, since the for loop tries to own "articles"
+                        song.load_texture_if_needed(ctx);
 
-                for i in start..end{ // Display tracks that should be displayed
-                // no longer render buffer stuff
-                    let song = &mut self.songs.articles[i]; // Ampersand makes it read-only, since the for loop tries to own "articles"
-                    song.load_texture_if_needed(ctx);
-
-                    //ui.set_min_width(available_width-20.0);
-                    let group = ui.group(|ui|{
-                        //ui.horizontal(|ui|{
-                        TableBuilder::new(ui)
-                            .column(Column::exact(col2_width+20.0)) // 20.0 comes from the first header (#) column's exact width. should be set to a variable! todo
-                            .column(Column::exact(col1_width))
-                            .column(Column::exact(col_time_width))
-                            .header(30.0, |mut header|{
-                                header.col(|ui|{
-                                    ui.horizontal(|ui|{
-                                        if let Some(tex) = &song.texture {
-                                            ui.add(
+                        //ui.set_min_width(available_width-20.0);
+                        let group = ui.group(|ui| {
+                            //ui.horizontal(|ui|{
+                            TableBuilder::new(ui)
+                                .column(Column::exact(col2_width + 20.0)) // 20.0 comes from the first header (#) column's exact width. should be set to a variable! todo
+                                .column(Column::exact(col1_width))
+                                .column(Column::exact(col_time_width))
+                                .header(30.0, |mut header| {
+                                    header.col(|ui| {
+                                        ui.horizontal(|ui| {
+                                            if let Some(tex) = &song.texture {
+                                                ui.add(
                                             egui::Image::new(tex) // TODO: Images are currently stored at native resolution and then scaled down here. They should be stored at display resolution.
                                                 .max_width(30.0)
                                                 .corner_radius(10),
                                         );
-                                        } else {
-                                            ui.label("img not found"); // TODO: "no album" image instead of text
-                                        }
-                                        ui.vertical(|ui|{ // song & artist names
-                                            ui.label(egui::RichText::new(format!("Title: {}", song.title)).strong());
-                                            ui.label(format!("Artist {}", song.artist));
+                                            } else {
+                                                ui.label("img not found"); // TODO: "no album" image instead of text
+                                            }
+                                            ui.vertical(|ui| {
+                                                // song & artist names
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "Title: {}",
+                                                        song.title
+                                                    ))
+                                                    .strong(),
+                                                );
+                                                ui.label(format!("Artist {}", song.artist));
+                                            });
+                                        });
+                                    });
+                                    header.col(|ui| {
+                                        ui.add_space(30.0);
+                                        ui.label("nyaaaaaaaa");
+                                    });
+                                    header.col(|ui| {
+                                        // todo: shouldn't be part of the table.
+                                        ui.vertical_centered(|ui| {
+                                            ui.label(format!("Length {}", song.length)); // this will need to convert whatever songs have (probably ms) into H:M:S format in the future
                                         });
                                     });
                                 });
-                                header.col(|ui|{
-                                    ui.add_space(30.0);
-                                    ui.label("nyaaaaaaaa");
-                                });
-                                header.col(|ui|{ // todo: shouldn't be part of the table.
-                                    ui.vertical_centered(|ui|{
-                                        ui.label(format!("Length {}", song.length)); // this will need to convert whatever songs have (probably ms) into H:M:S format in the future
-                                    });
-                                });
-                            });
-                        //});
-                    });
-                    if self.row_height.is_none(){
-                        self.row_height = Some(group.response.rect.height()); // todo: this is in the for loop and is probably fuck for performance \(￣︶￣*\))
-                    } // this really only needs to be done on startup and zoom (zoom tbi)
-                }
+                            //});
+                        });
+                        if self.row_height.is_none() {
+                            self.row_height = Some(group.response.rect.height()); // todo: this is in the for loop and is probably fuck for performance \(￣︶￣*\))
+                        } // this really only needs to be done on startup and zoom (zoom tbi)
+                    }
 
-                
-                let remaining_px = (total_rows - end) as f32 * row_height; //      <- part of render buffer
-                ui.add_space(remaining_px); // makes scroll bar look big (2/2)  <- part of render buffer
-            });
-            
+                    let remaining_px = (total_rows - end) as f32 * row_height; //      <- part of render buffer
+                    ui.add_space(remaining_px); // makes scroll bar look big (2/2)  <- part of render buffer
+                });
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 egui::warn_if_debug_build(ui); // this was in the example thing and idk if its needed or if theres a benefit to removing it
