@@ -189,14 +189,7 @@ pub fn print_walkdir() -> Result<(), Box<dyn std::error::Error>> {
 
 pub fn add_to_playlist(playlist: &mut M3uPlaylist, new_song: &SongCardData) {
     // todo: doesn't need to return error if there is nothing that can have an error here.
-    playlist.add_track(
-        &format!("{}", path_to_string(&new_song.path)),
-        &new_song.length_string,
-        &new_song.title,
-        &new_song.artist,
-        &format!("{}", new_song.cover_path),
-        &new_song.album,
-    );
+    playlist.add_track(&format!("{}", path_to_string(&new_song.path)));
 }
 
 pub fn remove_from_playlist(
@@ -215,11 +208,7 @@ pub fn remove_from_playlist(
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlaylistEntry {
     pub path: String,
-    pub length: String,
-    pub title: String,
-    pub artist: String,
-    pub album: String,
-    pub cover_path: String,
+    pub extra: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default, PartialEq)]
@@ -249,22 +238,10 @@ impl M3uPlaylist {
         }
     }
 
-    pub fn add_track(
-        &mut self,
-        path: &str,
-        length: &str,
-        title: &str,
-        artist: &str,
-        cover_path: &str,
-        album: &str,
-    ) {
+    pub fn add_track(&mut self, path: &str) {
         self.entries.push(PlaylistEntry {
             path: path.to_string(),
-            length: length.to_string(),
-            title: title.to_string(),
-            artist: artist.to_string(),
-            cover_path: cover_path.to_string(),
-            album: album.to_string(),
+            extra: None,
         });
     }
 }
@@ -288,92 +265,25 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<M3uPlaylist> {
     if !is_header {
         anyhow::bail!("\"{}\" is not an M3U file.", path.to_string_lossy());
     }
-
+    let mut pending_directives: Vec<String> = Vec::new();
     while let Some(line) = lines.next() {
         let line = line?;
+        let mut extra: Option<Vec<String>> = None;
+        if line.is_empty() {
+            continue;
+        }
 
-        let hash = line.find("#");
-        let colon = line.find(":");
-
-        if let Some(hash) = hash
-            && let Some(colon) = colon
-        {
-            // Ensure that colon comes after hash
-            if hash >= colon {
-                anyhow::bail!("Invalid M3U directive format");
-            }
-
-            // This is a directive line
-            let directive = &line[hash + 1..colon];
-            match directive {
-                "EXTINF" => {
-                    // Lists a file in the playlist
-                    let meta = line[colon + 1..].split(M3U_SEPARATOR).collect::<Vec<_>>();
-                    if meta.len() != 5 {
-                        anyhow::bail!("M3U EXTINF malformed or incompatible with MiniQuartz");
-                    }
-
-                    // let length = meta[0].parse::<u32>()
-                    //     .context("Unable to parse song runtime")?;
-
-                    let path = lines.next().transpose()?;
-                    if path.is_none() {
-                        anyhow::bail!("Song filepath is missing");
-                    }
-
-                    playlist.entries.push(PlaylistEntry {
-                        path: path.unwrap(),
-                        length: meta[0].to_owned(),
-                        title: meta[1].to_owned(),
-                        artist: meta[2].to_owned(),
-                        cover_path: meta[3].to_owned(),
-                        album: meta[4].to_owned(),
-                    });
-                }
-                "PLAYLIST" => {
-                    let title = &line[colon + 1..];
-                    playlist.title = title.to_owned();
-                }
-                _ => anyhow::bail!("Unknown M3U directive: {directive}"),
-            }
+        if line.starts_with('#') {
+            pending_directives.push(line);
         } else {
-            // This is a data line
+            playlist.entries.push(PlaylistEntry { 
+                path: line, 
+                extra: Some(std::mem::take(&mut pending_directives)) // This clears the buffer for the next song
+            });
         }
     }
 
     Ok(playlist)
-}
-
-pub fn edit_m3u_track(
-    playlist: &mut M3uPlaylist,
-    index: usize,
-    album: String,
-    artist: String,
-    cover_path: String,
-    title: String,
-    length_string: String,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(entry) = playlist.entries.get_mut(index) {
-        let changed = entry.album != album
-            || entry.artist != artist
-            || entry.cover_path != cover_path
-            || entry.title != title
-            || entry.length != length_string;
-
-        if changed {
-            entry.album = album;
-            entry.artist = artist;
-            entry.cover_path = cover_path;
-            entry.title = title;
-            entry.length = length_string;
-            println!("Done: Edited m3u track");
-        }
-
-        Ok(())
-    } else {
-        // eprintln!("edit_m3u_track: Index {} out of bounds", index); // unnecessary, returning Err is enough.
-        Err("Index out of bounds".into())
-    }
 }
 
 pub fn move_m3u_track(playlist: &mut M3uPlaylist, from: usize, to: usize) -> std::io::Result<()> {
@@ -428,42 +338,13 @@ pub fn write_m3u<P: AsRef<Path>>(
     }
 
     for entry in &playlist.entries {
-        // Only write metadata if requested AND if useful data exists
-        if !entry.title.is_empty() || !entry.length.is_empty() {
-            let length = if entry.length.is_empty() {
-                "--:--"
-            } else {
-                &entry.length
-            };
-            let title = if entry.title.is_empty() {
-                "Unknown Title"
-            } else {
-                &entry.title
-            };
-            let artist = if entry.artist.is_empty() {
-                "Unknown Artist(1)"
-            } else {
-                &entry.artist
-            };
-            let cover_path = if entry.cover_path.is_empty() {
-                "./assets/icon-256.png"
-            } else {
-                &entry.cover_path
-            };
-            let album = if entry.album.is_empty() {
-                "Unknown Album"
-            } else {
-                &entry.album
-            };
-
-            // Format: #EXTINF:seconds,Title
-            writeln!(
-                file,
-                "#EXTINF:{}␟{}␟{}␟{}␟{}",
-                length, title, artist, cover_path, album
-            )?;
+        if entry.extra.is_some(){
+            for directive in entry.extra.clone().unwrap(){
+                if let Err(e) = writeln!(file, "{}", directive){
+                    println!("Error writing directive to disk: {}", e);
+                }
+            }
         }
-        // Write the actual file path
         writeln!(file, "{}", entry.path)?;
     }
 

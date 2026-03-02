@@ -201,7 +201,7 @@ impl Default for TemplateApp {
                             println!("Loading into cache: {:?}", path);
                             read_m3u(&path).unwrap_or_else(|_| M3uPlaylist {
                                 title: String::new(),
-                                entries: vec![],
+                                entries: vec![PlaylistEntry{path:"playlists/playlist-1/color bars.mp3".to_string(), extra: None}],
                                 path: path,
                                 texture: None,
                             })
@@ -220,24 +220,22 @@ impl Default for TemplateApp {
                                         let _ = write_txn.commit();
                                     }
                                 }
-                                println!(
-                                    "Retrieved value: {}",
-                                    get_metadata_from_redb(&db_for_worker, uid)
-                                        .unwrap_or(EditTrack {
-                                            playlist_path: "FAILED2".to_string(),
-                                            track_path: "FAILED2".to_string(),
-                                            index: 0,
-                                            album: "FAILED2".to_string(),
-                                            artist: "FAILED2".to_string(),
-                                            cover: "FAILED2".to_string(),
-                                            title: "FAILED2".to_string(),
-                                            length_string: "FAILED2".to_string()
-                                        })
-                                        .title
-                                );
                                 // Database writes are done one at a time instead of batched and written all at once. This should be changed.
-                                time_since_task_added = std::time::Instant::now();
-                                need_write = true; // make the code within this else{} a function, since it's repeated frequently.
+                                // println!(
+                                //     "Retrieved value: {}",
+                                //     get_metadata_from_redb(&db_for_worker, uid)
+                                //         .unwrap_or(EditTrack {
+                                //             playlist_path: "FAILED2".to_string(),
+                                //             track_path: "FAILED2".to_string(),
+                                //             index: 0,
+                                //             album: "FAILED2".to_string(),
+                                //             artist: "FAILED2".to_string(),
+                                //             cover: "FAILED2".to_string(),
+                                //             title: "FAILED2".to_string(),
+                                //             length_string: "FAILED2".to_string()
+                                //         })
+                                //         .title
+                                // );
                             }
                             M3uEditTask::Add(data) => {
                                 println!("{}", "Queued: Adding m3u track");
