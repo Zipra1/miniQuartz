@@ -1,3 +1,4 @@
+use egui::TextureHandle;
 use redb::Database;
 use std::fs;
 use std::fs::File;
@@ -7,9 +8,7 @@ use walkdir::WalkDir;
 
 use crate::TemplateApp;
 use crate::app::{EditTrack, METADATA_TABLE};
-use crate::utilities::{
-    path_to_string, path_to_string_name, show_error, to_base62,
-};
+use crate::utilities::{path_to_string, path_to_string_name, show_error, to_base62};
 
 const M3U_HEADER: &'static str = "#EXTM3U";
 
@@ -153,6 +152,20 @@ impl SongCardData {
     }
 }
 
+pub fn path_to_texture(image_path: String, ctx: &egui::Context) -> Option<TextureHandle> {
+    if let Ok(image) = image::open(&image_path) {
+        let image = image.to_rgba8();
+        let size = [image.width() as usize, image.height() as usize];
+        let texture = ctx.load_texture(
+            "img".to_string(),
+            egui::ColorImage::from_rgba_unmultiplied(size, &image),
+            Default::default(),
+        );
+        return Some(texture);
+    }
+    None
+}
+
 pub fn get_playlists(path: &str) -> std::io::Result<Vec<PathBuf>> {
     let entries = fs::read_dir(path)?;
     let playlist_files = entries
@@ -260,6 +273,7 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<M3uPlaylist> {
         .unwrap_or(false);
 
     if !is_header {
+        eprintln!("playlist.rs@read_m3u: {} is not an M3U file.", path.to_string_lossy());
         anyhow::bail!("\"{}\" is not an M3U file.", path.to_string_lossy());
     }
     let mut pending_directives: Vec<String> = Vec::new();
@@ -272,9 +286,9 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<M3uPlaylist> {
         if line.starts_with('#') {
             pending_directives.push(line);
         } else {
-            playlist.entries.push(PlaylistEntry { 
-                path: line, 
-                extra: Some(std::mem::take(&mut pending_directives)) // This clears the buffer for the next song
+            playlist.entries.push(PlaylistEntry {
+                path: line,
+                extra: Some(std::mem::take(&mut pending_directives)), // This clears the buffer for the next song
             });
         }
     }
@@ -334,9 +348,9 @@ pub fn write_m3u<P: AsRef<Path>>(
     }
 
     for entry in &playlist.entries {
-        if entry.extra.is_some(){
-            for directive in entry.extra.clone().unwrap(){
-                if let Err(e) = writeln!(file, "{}", directive){
+        if entry.extra.is_some() {
+            for directive in entry.extra.clone().unwrap() {
+                if let Err(e) = writeln!(file, "{}", directive) {
                     println!("Error writing directive to disk: {}", e);
                 }
             }

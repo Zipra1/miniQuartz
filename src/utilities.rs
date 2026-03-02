@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use redb::Database;
 
-use crate::{TemplateApp, app::{EditTrack, METADATA_TABLE}};
+use crate::{
+    TemplateApp,
+    app::{EditTrack, METADATA_TABLE},
+};
 /// BASIC UTILITIES ///
 /// Simple functions used everywhere, mostly just conversions
 pub fn show_error(app: &mut TemplateApp, error: String) {
@@ -15,7 +18,7 @@ pub fn to_base62(mut n: usize, width: usize) -> String {
     let mut result = Vec::new();
 
     if n == 0 {
-        result.push(charset[0]); 
+        result.push(charset[0]);
     } else {
         while n > 0 {
             result.push(charset[n % 62]);
@@ -64,10 +67,22 @@ pub fn get_metadata_from_redb(db: &Database, uid: String) -> Option<EditTrack> {
     postcard::from_bytes(bytes).ok()
 }
 
+pub fn remove_illegal_characters(input: &str) -> String {
+    input
+        .chars()
+        .filter(|&c| {
+            !matches!(
+                c,
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'..='\u{001F}'
+            )
+        })
+        .collect()
+}
+
 /*fn uri_to_path(uri: &str) -> Result<PathBuf, String> {
     Url::parse(uri)
         .map_err(|e| e.to_string())?
         .to_file_path()
         .map_err(|_| "Invalid URI".into())
 }*/
- //commented out bc nothing uses it rn
+//commented out bc nothing uses it rn

@@ -5,12 +5,10 @@ use gstreamer::prelude::*; // $env:PKG_CONFIG_PATH="C:\Program Files\gstreamer\1
 use gstreamer::tags;
 use image::imageops::FilterType;
 use redb::{Database, TableDefinition};
-use rustc_hash::FxHasher;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
@@ -511,15 +509,14 @@ pub fn get_metadata(
     let seconds = length_secs % 60;
     let length_string = format!("{:02}:{:02}", minutes, seconds);
 
-    let mut hasher = FxHasher::default();
+    let mut unique_id = remove_illegal_characters(&uri);
     if album != "Unknown Album" && artist != "Unknown Artist" {
-        format!("{}{}", album, artist).hash(&mut hasher);
+        unique_id = remove_illegal_characters(&format!("{}{}", album, artist));
         // if just the file path is used, then the same cover would be cached multiple times
-    } else {
-        uri.hash(&mut hasher);
+        // this is assuming that tracks on an album do not have different covers, which may actually not be the case
+        // so this needs to be changed to handle that
     }
 
-    let unique_id = hasher.finish();
     let output_path_str = format!("cache/cover_{}.jpg", unique_id);
     let output_path = PathBuf::from(output_path_str.clone());
 
