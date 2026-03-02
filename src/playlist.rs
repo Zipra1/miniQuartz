@@ -224,6 +224,8 @@ pub struct PlaylistEntry {
 #[derive(Clone, Default, PartialEq)]
 pub struct M3uPlaylist {
     pub title: String,
+    pub description: String,
+    pub cover_path: String,
     pub entries: Vec<PlaylistEntry>,
     pub path: String,
     pub texture: Option<egui::TextureHandle>,
@@ -242,6 +244,8 @@ impl M3uPlaylist {
     pub fn new() -> Self {
         M3uPlaylist {
             title: String::new(),
+            description: String::new(),
+            cover_path: String::new(),
             entries: Vec::new(),
             path: String::new(),
             texture: None,
@@ -282,7 +286,9 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<M3uPlaylist> {
         if line.is_empty() {
             continue;
         }
-
+        if line.starts_with("#PLAYLIST:"){
+            playlist.title = line[10..line.len()].to_string();
+        }
         if line.starts_with('#') {
             pending_directives.push(line);
         } else {

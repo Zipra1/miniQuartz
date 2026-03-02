@@ -213,7 +213,6 @@ pub fn rename_playlist(app: &mut TemplateApp, ui: &mut egui::Ui) {
                                     app.playlists = get_playlists("./playlists/").unwrap_or_default();
                                     if set_current{
                                         app.currently_selected_playlist_path = new_path;
-                                        app.currently_selected_playlist_name = Some(text[4..].to_string());
                                     }
                                 }
                             }

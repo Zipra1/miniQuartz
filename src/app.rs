@@ -197,6 +197,8 @@ impl Default for TemplateApp {
                             println!("Loading into cache: {:?}", path);
                             read_m3u(&path).unwrap_or_else(|_| M3uPlaylist {
                                 title: String::new(),
+                                description: String::new(),
+                                cover_path: String::new(),
                                 entries: vec![PlaylistEntry{path:"playlists/playlist-1/color bars.mp3".to_string(), extra: None}],
                                 path: path,
                                 texture: None,
@@ -899,7 +901,7 @@ impl eframe::App for TemplateApp {
 
                             if response.clicked() {
                                 self.songs =
-                                    Songs::new(&self.playlists[i], &self.redb_metadata_cache);
+                                    Songs::new( &self.playlists[i], &self.redb_metadata_cache);
                                 self.currently_selected_playlist_name =
                                     Some(playlist_name.to_string());
                                 self.currently_selected_playlist_path =
