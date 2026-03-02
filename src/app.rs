@@ -6,6 +6,7 @@ use gstreamer::prelude::*; // $env:PKG_CONFIG_PATH="C:\Program Files\gstreamer\1
 use gstreamer::tags;
 use image::imageops::FilterType;
 use redb::{Database, TableDefinition};
+use rustc_hash::FxHasher;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -135,7 +136,7 @@ pub struct ThreadInfo {
     pub queue_size: usize,
 }
 
-pub const METADATA_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("metadata_table");
+pub const METADATA_TABLE: TableDefinition<String, &[u8]> = TableDefinition::new("metadata_table");
 
 impl Default for TemplateApp {
     fn default() -> Self {
@@ -207,21 +208,33 @@ impl Default for TemplateApp {
                         });
                         match task {
                             M3uEditTask::Edit(data) => {
-                                let mut hasher = DefaultHasher::new();
-                                path_to_uri(PathBuf::from(data.track_path.clone()))
-                                    .hash(&mut hasher);
-                                let uid = hasher.finish();
+                                let uid = data.track_path.clone();
                                 //println!("{} = {}",uid,path_to_uri(PathBuf::from(data.track_path.clone())));
 
                                 if let Ok(encoded_bytes) = postcard::to_allocvec(&data) {
                                     if let Ok(write_txn) = db_for_worker.begin_write() {
                                         if let Ok(mut table) = write_txn.open_table(METADATA_TABLE)
                                         {
-                                            let _ = table.insert(uid, encoded_bytes.as_slice());
+                                            let _ = table.insert(uid.clone(), encoded_bytes.as_slice());
                                         }
                                         let _ = write_txn.commit();
                                     }
                                 }
+                                println!(
+                                    "Retrieved value: {}",
+                                    get_metadata_from_redb(&db_for_worker, uid)
+                                        .unwrap_or(EditTrack {
+                                            playlist_path: "FAILED2".to_string(),
+                                            track_path: "FAILED2".to_string(),
+                                            index: 0,
+                                            album: "FAILED2".to_string(),
+                                            artist: "FAILED2".to_string(),
+                                            cover: "FAILED2".to_string(),
+                                            title: "FAILED2".to_string(),
+                                            length_string: "FAILED2".to_string()
+                                        })
+                                        .title
+                                );
                                 // Database writes are done one at a time instead of batched and written all at once. This should be changed.
                                 time_since_task_added = std::time::Instant::now();
                                 need_write = true; // make the code within this else{} a function, since it's repeated frequently.
@@ -502,7 +515,7 @@ pub fn get_metadata(
     let seconds = length_secs % 60;
     let length_string = format!("{:02}:{:02}", minutes, seconds);
 
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     if album != "Unknown Album" && artist != "Unknown Artist" {
         format!("{}{}", album, artist).hash(&mut hasher);
         // if just the file path is used, then the same cover would be cached multiple times

@@ -57,7 +57,7 @@ pub fn path_to_uri(path: std::path::PathBuf) -> String {
     uri
 }
 
-pub fn get_metadata_from_redb(db: &Database, uid: u64) -> Option<EditTrack> {
+pub fn get_metadata_from_redb(db: &Database, uid: String) -> Option<EditTrack> {
     let read_txn = db.begin_read().ok()?;
     let table = read_txn.open_table(METADATA_TABLE).ok()?;
     let access = table.get(uid).ok()??; // double ? because table.get returns Result<Option<T>>

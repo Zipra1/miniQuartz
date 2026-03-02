@@ -1,4 +1,5 @@
 use redb::Database;
+use rustc_hash::FxHasher;
 use std::fs;
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -42,37 +43,43 @@ impl Songs {
             Ok(entries) => entries,
             Err(_) => return Songs { articles: vec![] },
         };
+        {
+            let write_txn = db.begin_write().expect("Failed to begin write txn");
+            let _ = write_txn
+                .open_table(METADATA_TABLE)
+                .expect("Failed to initialize table");
+            write_txn.commit().expect("Failed to commit table creation");
+        }
         let read_txn = db.begin_read().expect("Failed to begin read txn");
         let table = read_txn
             .open_table(METADATA_TABLE)
             .expect("Failed to open table");
 
         let iter = playlist_entries.into_iter().map(|entry| {
-            let mut hasher = DefaultHasher::new();
-            path_to_uri(PathBuf::from(entry.path)).hash(&mut hasher);
-            let uid = hasher.finish();
-            let metadata = table.get(uid)
-            .ok()
-            .flatten()
-            .and_then(|val| postcard::from_bytes(val.value()).ok())
-            .unwrap_or(EditTrack{
-                playlist_path: "FAILED".to_string(),
-                track_path: "FAILED".to_string(),
-                index: 0,
-                album: "FAILED".to_string(),
-                artist: "FAILED".to_string(),
-                cover: "FAILED".to_string(),
-                title: "FAILED".to_string(),
-                length_string: "FAILED".to_string(),
-            });
-            
+            let uid = &entry.path;
+            let metadata = table
+                .get(uid)
+                .ok()
+                .flatten()
+                .and_then(|val| postcard::from_bytes(val.value()).ok())
+                .unwrap_or(EditTrack {
+                    playlist_path: "FAILED".to_string(),
+                    track_path: "FAILED".to_string(),
+                    index: 0,
+                    album: "FAILED".to_string(),
+                    artist: "FAILED".to_string(),
+                    cover: "FAILED".to_string(),
+                    title: "FAILED".to_string(),
+                    length_string: "FAILED".to_string(),
+                });
+
             SongCardData {
                 title: metadata.title,
                 artist: metadata.artist,
                 album: metadata.album,
                 length_string: metadata.length_string,
                 cover_path: metadata.cover,
-                path: PathBuf::from(metadata.track_path),
+                path: PathBuf::from(&entry.path),
                 texture: None,
                 playing: false,
                 metadata_loaded: false,

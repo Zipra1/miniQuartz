@@ -2384,6 +2384,7 @@ dependencies = [
  "m3u",
  "postcard",
  "redb",
+ "rustc-hash 2.1.1",
  "serde",
  "url 2.5.8",
  "walkdir",
