@@ -4,13 +4,15 @@ use egui::{Id, Modal, ScrollArea};
 use gstreamer::prelude::*; // $env:PKG_CONFIG_PATH="C:\Program Files\gstreamer\1.0\msvc_x86_64\lib\pkgconfig"
 use gstreamer::tags;
 use image::imageops::FilterType;
+use redb::{Database, TableDefinition};
+use rustc_hash::FxHasher;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
@@ -22,7 +24,6 @@ use crate::utilities::*;
 const _PLAYLIST_PAGE: usize = 0;
 const _SETTINGS_PAGE: usize = 1;
 // Later on, these constants should be used as a way to switch what's displayed in the central panel.
-
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
@@ -123,12 +124,17 @@ pub struct TemplateApp {
 
     #[serde(skip)]
     pub loaded_paths: HashSet<PathBuf>,
+
+    #[serde(skip)]
+    pub redb_metadata_cache: Arc<Database>,
 }
 
 pub struct ThreadInfo {
     pub time_since_task_added: std::time::Instant,
     pub queue_size: usize,
 }
+
+pub const METADATA_TABLE: TableDefinition<String, &[u8]> = TableDefinition::new("metadata_table");
 
 impl Default for TemplateApp {
     fn default() -> Self {
@@ -138,12 +144,19 @@ impl Default for TemplateApp {
         let (metadata_sender, req_rx) = std::sync::mpsc::channel::<MetadataRequest>();
 
         std::thread::spawn(move || {
+            // [[metadata-thread]]
+            // add things to this using load_metadata_if_needed: [[@load-metadata-fn]]
+            // metadata is retrieved from metadata-receiver at [[@processing-metadata]]
+
             let discoverer =
                 gstreamer_pbutils::Discoverer::new(gstreamer::ClockTime::from_seconds(5))
                     .expect("Failed to create discoverer"); // todo: proper error
 
             while let Ok(request) = req_rx.recv() {
-                println!("Processing: {}", path_to_string(&request.path));
+                println!(
+                    "Received metadata request: {}",
+                    path_to_string(&request.path)
+                );
                 if let Ok(metadata) = get_metadata(&discoverer, request.path.clone()) {
                     if let Err(e) = result_tx.send(MetadataResult {
                         path: request.path,
@@ -157,11 +170,16 @@ impl Default for TemplateApp {
 
         let (sender_m3u, receiver_m3u) = std::sync::mpsc::channel::<M3uEditTask>();
 
+        let db = Database::create("cache/metadata.redb").expect("Failed to create redb database");
+        let shared_db = Arc::new(db);
+        let db_for_worker = shared_db.clone();
+
         std::thread::spawn(move || {
             let mut time_since_task_added = std::time::Instant::now();
             let mut need_write = false;
             let mut urgent = false;
             let mut pending_updates: HashMap<std::path::PathBuf, M3uPlaylist> = HashMap::new();
+
             loop {
                 match receiver_m3u.recv_timeout(Duration::from_millis(300)) {
                     Ok(task) => {
@@ -169,7 +187,7 @@ impl Default for TemplateApp {
                         need_write = false;
                         urgent = false;
                         let path = match &task {
-                            M3uEditTask::Edit(data) => data.path.clone(),
+                            M3uEditTask::Edit(data) => data.playlist_path.clone(),
                             M3uEditTask::Add(data) => data.file_path.clone(),
                             M3uEditTask::Remove(data) => data.file_path.clone(),
                             M3uEditTask::Move(data) => data.file_path.clone(),
@@ -181,31 +199,41 @@ impl Default for TemplateApp {
                             println!("Loading into cache: {:?}", path);
                             read_m3u(&path).unwrap_or_else(|_| M3uPlaylist {
                                 title: String::new(),
-                                entries: vec![],
+                                entries: vec![PlaylistEntry{path:"playlists/playlist-1/color bars.mp3".to_string(), extra: None}],
                                 path: path,
                                 texture: None,
                             })
                         });
                         match task {
                             M3uEditTask::Edit(data) => {
-                                println!("{}", "Queued: Edit m3u track");
-                                if let Err(e) = edit_m3u_track(
-                                    playlist,
-                                    data.index,
-                                    data.album,
-                                    data.artist,
-                                    data.cover,
-                                    data.title,
-                                    data.length_string,
-                                ) {
-                                    eprintln!(
-                                        "Failed to edit m3u track @ metadata cache thread: {}",
-                                        e
-                                    );
-                                } else {
-                                    time_since_task_added = std::time::Instant::now();
-                                    need_write = true; // make the code within this else{} a function, since it's repeated frequently.
+                                let uid = data.track_path.clone();
+                                //println!("{} = {}",uid,path_to_uri(PathBuf::from(data.track_path.clone())));
+
+                                if let Ok(encoded_bytes) = postcard::to_allocvec(&data) {
+                                    if let Ok(write_txn) = db_for_worker.begin_write() {
+                                        if let Ok(mut table) = write_txn.open_table(METADATA_TABLE)
+                                        {
+                                            let _ = table.insert(uid.clone(), encoded_bytes.as_slice());
+                                        }
+                                        let _ = write_txn.commit();
+                                    }
                                 }
+                                // Database writes are done one at a time instead of batched and written all at once. This should be changed.
+                                // println!(
+                                //     "Retrieved value: {}",
+                                //     get_metadata_from_redb(&db_for_worker, uid)
+                                //         .unwrap_or(EditTrack {
+                                //             playlist_path: "FAILED2".to_string(),
+                                //             track_path: "FAILED2".to_string(),
+                                //             index: 0,
+                                //             album: "FAILED2".to_string(),
+                                //             artist: "FAILED2".to_string(),
+                                //             cover: "FAILED2".to_string(),
+                                //             title: "FAILED2".to_string(),
+                                //             length_string: "FAILED2".to_string()
+                                //         })
+                                //         .title
+                                // );
                             }
                             M3uEditTask::Add(data) => {
                                 println!("{}", "Queued: Adding m3u track");
@@ -246,7 +274,9 @@ impl Default for TemplateApp {
                 }
 
                 let write_delay_time = 1000 - (urgent as u64 * 950);
-                if time_since_task_added.elapsed() >= std::time::Duration::from_millis(write_delay_time) && need_write
+                if time_since_task_added.elapsed()
+                    >= std::time::Duration::from_millis(write_delay_time)
+                    && need_write
                 {
                     need_write = false;
                     urgent = false;
@@ -267,8 +297,8 @@ impl Default for TemplateApp {
             .expect("Could not create playbin");
 
         Self {
-            songs: Songs::new(&std::path::PathBuf::from("./playlists/")),
-            queue: Songs::new(&std::path::PathBuf::from("queue.m3u")),
+            songs: Songs::new(&std::path::PathBuf::from("./playlists/"), &shared_db),
+            queue: Songs::new(&std::path::PathBuf::from("queue.m3u"), &shared_db),
             row_height: None,
             col1_width: None,
             col2_width: None,
@@ -341,6 +371,8 @@ impl Default for TemplateApp {
             color: egui::Color32::RED,
 
             loaded_paths: HashSet::new(),
+
+            redb_metadata_cache: shared_db,
         }
     }
 }
@@ -359,7 +391,10 @@ impl TemplateApp {
 
         if app.currently_selected_playlist_path.exists() {
             // Check bc user may have deleted folder
-            app.songs = Songs::new(&app.currently_selected_playlist_path);
+            app.songs = Songs::new(
+                &app.currently_selected_playlist_path,
+                &app.redb_metadata_cache,
+            );
         } else {
             app.currently_selected_playlist_name = Some("Playlist not found".to_owned());
         }
@@ -388,14 +423,16 @@ pub struct Metadata {
     length_string: String,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct EditTrack {
-    path: String,
-    index: usize,
-    album: String,
-    artist: String,
-    cover: String,
-    title: String,
-    length_string: String,
+    pub playlist_path: String,
+    pub track_path: String,
+    pub index: usize,
+    pub album: String,
+    pub artist: String,
+    pub cover: String,
+    pub title: String,
+    pub length_string: String,
 }
 
 pub struct AddTrack {
@@ -431,12 +468,6 @@ pub fn get_metadata(
     discoverer: &gstreamer_pbutils::Discoverer,
     path: std::path::PathBuf,
 ) -> Result<Metadata, anyhow::Error> {
-    /*
-    let uri = path_to_uri(path.clone());
-    let info = discoverer.discover_uri(&uri)?;
-    let info2 = info.stream_info().ok_or_else(|| anyhow::anyhow!("No stream info"))?;
-    let tags = info2.tags();
-    */
     let uri = path_to_uri(path);
     let info = discoverer.discover_uri(&uri)?;
 
@@ -480,9 +511,10 @@ pub fn get_metadata(
     let seconds = length_secs % 60;
     let length_string = format!("{:02}:{:02}", minutes, seconds);
 
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     if album != "Unknown Album" && artist != "Unknown Artist" {
-        format!("{}{}", album, artist).hash(&mut hasher); // this is like this so that we don't cache multiple of the same cover
+        format!("{}{}", album, artist).hash(&mut hasher);
+        // if just the file path is used, then the same cover would be cached multiple times
     } else {
         uri.hash(&mut hasher);
     }
@@ -547,6 +579,7 @@ pub fn load_metadata_if_needed(
 ) {
     if !song.metadata_loaded {
         if let Err(e) = sender.send(MetadataRequest {
+            // metadata requests processed at [[@metadata-thread]] [[load-metadata-fn]]
             path: song.path.clone(),
         }) {
             println!("load_metadata_if_needed Metadata Request error: {}", e);
@@ -868,7 +901,8 @@ impl eframe::App for TemplateApp {
                             }
 
                             if response.clicked() {
-                                self.songs = Songs::new(&self.playlists[i]);
+                                self.songs =
+                                    Songs::new(&self.playlists[i], &self.redb_metadata_cache);
                                 self.currently_selected_playlist_name =
                                     Some(playlist_name.to_string());
                                 self.currently_selected_playlist_path =
@@ -1048,6 +1082,8 @@ impl eframe::App for TemplateApp {
                     ui.add_space(above_px); // makes scroll bar look big (1/2)
 
                     for result in self.metadata_receiver.try_iter().take(1) {
+                        // [[processing-metadata]]
+                        // items are added to the metadata receiver at [[@metadata-thread]]
                         for (index, song) in self
                             .songs
                             .articles
@@ -1056,16 +1092,17 @@ impl eframe::App for TemplateApp {
                             .filter(|(_, s)| s.path == result.path)
                         //.take(1)
                         {
+                            // This if statement is here because in the event of duplicate songs this would be run n^2 times, n being the number of duplicate songs in a playlist.
                             if !self.loaded_paths.contains(&result.path)
                                 || (self.currently_selected_playlist_name
                                     == Some("Local Files".to_string()))
                             {
-                                println!("Recacheing {}", path_to_string(&result.path));
                                 // TODO: Actual folder-space check
+                                println!(
+                                    "Processing a metadata result: {}",
+                                    path_to_string(&result.path)
+                                );
                                 self.loaded_paths.insert(result.path.clone());
-                                /*  This will have an issue where only the first instance of a song is updated.
-                                Might be good if each song creates a <hash>.mqinf for metadata, and #EXTINF just references to that file.
-                                that way each instance of a song can be edited all at once. */
                                 song.album = result.data.album.clone();
                                 song.artist = result.data.artist.clone();
                                 song.length_string = result.data.length_string.clone();
@@ -1076,9 +1113,10 @@ impl eframe::App for TemplateApp {
                                 }
                                 song.cover_path = result.data.cover_path.clone();
                                 if let Err(e) = self.m3u_sender.send(M3uEditTask::Edit(EditTrack {
-                                    path: path_to_string(
+                                    playlist_path: path_to_string(
                                         &self.currently_selected_playlist_path.to_path_buf(),
                                     ),
+                                    track_path: path_to_string(&song.path),
                                     index,
                                     album: song.album.clone(),
                                     artist: song.artist.clone(),
@@ -1168,7 +1206,7 @@ impl eframe::App for TemplateApp {
                     }
                     if ui.input(|i| i.pointer.primary_released()) {
                         if !clicked_song {
-                            println!("clicked not song");
+                            println!("clicked not song, deselecting all songs");
                             self.selected_songs.clear();
                         }
                         if let Some((from, to)) = self.swap_request {

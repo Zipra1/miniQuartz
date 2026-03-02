@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use crate::TemplateApp;
+use redb::Database;
+
+use crate::{TemplateApp, app::{EditTrack, METADATA_TABLE}};
 /// BASIC UTILITIES ///
 /// Simple functions used everywhere, mostly just conversions
 pub fn show_error(app: &mut TemplateApp, error: String) {
@@ -52,6 +54,14 @@ pub fn path_to_uri(path: std::path::PathBuf) -> String {
 
     let uri = format!("file:///{}", cleaned_path);
     uri
+}
+
+pub fn get_metadata_from_redb(db: &Database, uid: String) -> Option<EditTrack> {
+    let read_txn = db.begin_read().ok()?;
+    let table = read_txn.open_table(METADATA_TABLE).ok()?;
+    let access = table.get(uid).ok()??; // double ? because table.get returns Result<Option<T>>
+    let bytes = access.value();
+    postcard::from_bytes(bytes).ok()
 }
 
 /*fn uri_to_path(uri: &str) -> Result<PathBuf, String> {
