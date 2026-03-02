@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 
-use redb::{Database, TableDefinition};
-use serde::de::DeserializeOwned;
+use redb::Database;
 
-use crate::{TemplateApp, app::{EditTrack, METADATA_TABLE, Metadata}};
+use crate::{TemplateApp, app::{EditTrack, METADATA_TABLE}};
 /// BASIC UTILITIES ///
 /// Simple functions used everywhere, mostly just conversions
 pub fn show_error(app: &mut TemplateApp, error: String) {

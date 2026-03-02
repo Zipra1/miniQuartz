@@ -1,8 +1,6 @@
 use redb::Database;
-use rustc_hash::FxHasher;
 use std::fs;
 use std::fs::File;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufRead, BufReader, Error, Write};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -10,11 +8,10 @@ use walkdir::WalkDir;
 use crate::TemplateApp;
 use crate::app::{EditTrack, METADATA_TABLE};
 use crate::utilities::{
-    get_metadata_from_redb, path_to_string, path_to_string_name, path_to_uri, show_error, to_base62,
+    path_to_string, path_to_string_name, show_error, to_base62,
 };
 
 const M3U_HEADER: &'static str = "#EXTM3U";
-const M3U_SEPARATOR: char = '␟';
 
 /// PLAYLIST ///
 /// Song management & organization
@@ -146,7 +143,7 @@ impl SongCardData {
                 let image = image.to_rgba8();
                 let size = [image.width() as usize, image.height() as usize];
                 let texture = ctx.load_texture(
-                    self.cover_path.clone(),
+                    "ac".to_string(),
                     egui::ColorImage::from_rgba_unmultiplied(size, &image),
                     Default::default(),
                 );
@@ -268,7 +265,6 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<M3uPlaylist> {
     let mut pending_directives: Vec<String> = Vec::new();
     while let Some(line) = lines.next() {
         let line = line?;
-        let mut extra: Option<Vec<String>> = None;
         if line.is_empty() {
             continue;
         }
