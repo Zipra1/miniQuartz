@@ -266,6 +266,8 @@ pub fn draw_song_card(
     {
         // TODO: Actual folder-space check
         load_metadata_if_needed(song, app.metadata_sender.clone());
+        /* This is only being done ONCE per song, because load_metadata_if_needed is actually just for the cache.
+           The song cards themselves retrieve their data only from the cache. */
     }
     song.load_texture_if_needed(ctx);
 
