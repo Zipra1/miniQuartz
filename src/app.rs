@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
@@ -124,6 +125,9 @@ pub struct TemplateApp {
 
     #[serde(skip)]
     pub loaded_paths: HashSet<PathBuf>,
+
+    #[serde(skip)]
+    pub redb_metadata_cache: Arc<Database>,
 }
 
 pub struct ThreadInfo {
@@ -167,29 +171,15 @@ impl Default for TemplateApp {
 
         let (sender_m3u, receiver_m3u) = std::sync::mpsc::channel::<M3uEditTask>();
 
+        let db = Database::create("cache/metadata.redb").expect("Failed to create redb database");
+        let shared_db = Arc::new(db);
+        let db_for_worker = shared_db.clone();
+
         std::thread::spawn(move || {
-            let db =
-                Database::create("cache/metadata.redb").expect("Failed to create redb database");
             let mut time_since_task_added = std::time::Instant::now();
             let mut need_write = false;
             let mut urgent = false;
             let mut pending_updates: HashMap<std::path::PathBuf, M3uPlaylist> = HashMap::new();
-
-            println!(
-                "MEOOOOOOOOOOWWWWWWWW {}",
-                get_metadata_from_redb(&db, 12929981593986958427)
-                    .unwrap_or(EditTrack {
-                        playlist_path: "FAILED".to_string(),
-                        track_path: "FAILED".to_string(),
-                        index: 0,
-                        album: "FAILED".to_string(),
-                        artist: "FAILED".to_string(),
-                        cover: "FAILED".to_string(),
-                        title: "FAILED".to_string(),
-                        length_string: "FAILED".to_string()
-                    })
-                    .title
-            );
 
             loop {
                 match receiver_m3u.recv_timeout(Duration::from_millis(300)) {
@@ -224,7 +214,7 @@ impl Default for TemplateApp {
                                 //println!("{} = {}",uid,path_to_uri(PathBuf::from(data.track_path.clone())));
 
                                 if let Ok(encoded_bytes) = postcard::to_allocvec(&data) {
-                                    if let Ok(write_txn) = db.begin_write() {
+                                    if let Ok(write_txn) = db_for_worker.begin_write() {
                                         if let Ok(mut table) = write_txn.open_table(METADATA_TABLE)
                                         {
                                             let _ = table.insert(uid, encoded_bytes.as_slice());
@@ -233,22 +223,6 @@ impl Default for TemplateApp {
                                     }
                                 }
                                 // Database writes are done one at a time instead of batched and written all at once. This should be changed.
-                                println!(
-                                    "Retrieved value: {}",
-                                    get_metadata_from_redb(&db, uid)
-                                        .unwrap_or(EditTrack {
-                                            playlist_path: "FAILED".to_string(),
-                                            track_path: "FAILED".to_string(),
-                                            index: 0,
-                                            album: "FAILED".to_string(),
-                                            artist: "FAILED".to_string(),
-                                            cover: "FAILED".to_string(),
-                                            title: "FAILED".to_string(),
-                                            length_string: "FAILED".to_string()
-                                        })
-                                        .title
-                                );
-
                                 time_since_task_added = std::time::Instant::now();
                                 need_write = true; // make the code within this else{} a function, since it's repeated frequently.
                             }
@@ -314,8 +288,8 @@ impl Default for TemplateApp {
             .expect("Could not create playbin");
 
         Self {
-            songs: Songs::new(&std::path::PathBuf::from("./playlists/")),
-            queue: Songs::new(&std::path::PathBuf::from("queue.m3u")),
+            songs: Songs::new(&std::path::PathBuf::from("./playlists/"), &shared_db),
+            queue: Songs::new(&std::path::PathBuf::from("queue.m3u"), &shared_db),
             row_height: None,
             col1_width: None,
             col2_width: None,
@@ -388,6 +362,8 @@ impl Default for TemplateApp {
             color: egui::Color32::RED,
 
             loaded_paths: HashSet::new(),
+
+            redb_metadata_cache: shared_db,
         }
     }
 }
@@ -406,7 +382,10 @@ impl TemplateApp {
 
         if app.currently_selected_playlist_path.exists() {
             // Check bc user may have deleted folder
-            app.songs = Songs::new(&app.currently_selected_playlist_path);
+            app.songs = Songs::new(
+                &app.currently_selected_playlist_path,
+                &app.redb_metadata_cache,
+            );
         } else {
             app.currently_selected_playlist_name = Some("Playlist not found".to_owned());
         }
@@ -437,14 +416,14 @@ pub struct Metadata {
 
 #[derive(Serialize, Deserialize)]
 pub struct EditTrack {
-    playlist_path: String,
-    track_path: String,
-    index: usize,
-    album: String,
-    artist: String,
-    cover: String,
-    title: String,
-    length_string: String,
+    pub playlist_path: String,
+    pub track_path: String,
+    pub index: usize,
+    pub album: String,
+    pub artist: String,
+    pub cover: String,
+    pub title: String,
+    pub length_string: String,
 }
 
 pub struct AddTrack {
@@ -913,7 +892,8 @@ impl eframe::App for TemplateApp {
                             }
 
                             if response.clicked() {
-                                self.songs = Songs::new(&self.playlists[i]);
+                                self.songs =
+                                    Songs::new(&self.playlists[i], &self.redb_metadata_cache);
                                 self.currently_selected_playlist_name =
                                     Some(playlist_name.to_string());
                                 self.currently_selected_playlist_path =

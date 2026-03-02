@@ -1,11 +1,16 @@
+use redb::Database;
 use std::fs;
 use std::fs::File;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufRead, BufReader, Error, Write};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use crate::TemplateApp;
-use crate::utilities::{path_to_string, path_to_string_name, show_error, to_base62};
+use crate::app::{EditTrack, METADATA_TABLE};
+use crate::utilities::{
+    get_metadata_from_redb, path_to_string, path_to_string_name, path_to_uri, show_error, to_base62,
+};
 
 const M3U_HEADER: &'static str = "#EXTM3U";
 const M3U_SEPARATOR: char = '␟';
@@ -32,28 +37,42 @@ pub struct SongCardData {
 }
 
 impl Songs {
-    pub fn new(m3u_path: &PathBuf) -> Songs {
+    pub fn new(m3u_path: &PathBuf, db: &Database) -> Songs {
         let playlist_entries = match read_m3u(m3u_path) {
             Ok(entries) => entries,
             Err(_) => return Songs { articles: vec![] },
         };
+        let read_txn = db.begin_read().expect("Failed to begin read txn");
+        let table = read_txn
+            .open_table(METADATA_TABLE)
+            .expect("Failed to open table");
+
         let iter = playlist_entries.into_iter().map(|entry| {
-            let display_title = if entry.title.is_empty() {
-                Path::new(&entry.path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "Unknown Track".to_string())
-            } else {
-                entry.title
-            };
-            let path = &entry.path;
+            let mut hasher = DefaultHasher::new();
+            path_to_uri(PathBuf::from(entry.path)).hash(&mut hasher);
+            let uid = hasher.finish();
+            let metadata = table.get(uid)
+            .ok()
+            .flatten()
+            .and_then(|val| postcard::from_bytes(val.value()).ok())
+            .unwrap_or(EditTrack{
+                playlist_path: "FAILED".to_string(),
+                track_path: "FAILED".to_string(),
+                index: 0,
+                album: "FAILED".to_string(),
+                artist: "FAILED".to_string(),
+                cover: "FAILED".to_string(),
+                title: "FAILED".to_string(),
+                length_string: "FAILED".to_string(),
+            });
+            
             SongCardData {
-                title: display_title,
-                artist: entry.artist,
-                album: entry.album,
-                length_string: entry.length,
-                cover_path: entry.cover_path,
-                path: PathBuf::from(path),
+                title: metadata.title,
+                artist: metadata.artist,
+                album: metadata.album,
+                length_string: metadata.length_string,
+                cover_path: metadata.cover,
+                path: PathBuf::from(metadata.track_path),
                 texture: None,
                 playing: false,
                 metadata_loaded: false,
@@ -63,6 +82,12 @@ impl Songs {
 
         Songs {
             articles: Vec::from_iter(iter),
+        }
+    }
+
+    pub fn empty() -> Songs {
+        Songs {
+            articles: Vec::new(),
         }
     }
 
@@ -155,10 +180,8 @@ pub fn print_walkdir() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn add_to_playlist(
-    playlist: &mut M3uPlaylist,
-    new_song: &SongCardData,
-){ // todo: doesn't need to return error if there is nothing that can have an error here.
+pub fn add_to_playlist(playlist: &mut M3uPlaylist, new_song: &SongCardData) {
+    // todo: doesn't need to return error if there is nothing that can have an error here.
     playlist.add_track(
         &format!("{}", path_to_string(&new_song.path)),
         &new_song.length_string,
@@ -185,7 +208,7 @@ pub fn remove_from_playlist(
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlaylistEntry {
     pub path: String,
-    pub length: String, 
+    pub length: String,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -249,9 +272,11 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<M3uPlaylist> {
     let mut playlist = M3uPlaylist::new();
 
     // Verify that this file is actually an M3U file
-    let is_header = lines.next().transpose()?.map(|header| {
-        header == M3U_HEADER
-    }).unwrap_or(false);
+    let is_header = lines
+        .next()
+        .transpose()?
+        .map(|header| header == M3U_HEADER)
+        .unwrap_or(false);
 
     if !is_header {
         anyhow::bail!("\"{}\" is not an M3U file.", path.to_string_lossy());
@@ -259,11 +284,13 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<M3uPlaylist> {
 
     while let Some(line) = lines.next() {
         let line = line?;
-        
+
         let hash = line.find("#");
         let colon = line.find(":");
 
-        if let Some(hash) = hash && let Some(colon) = colon {
+        if let Some(hash) = hash
+            && let Some(colon) = colon
+        {
             // Ensure that colon comes after hash
             if hash >= colon {
                 anyhow::bail!("Invalid M3U directive format");
@@ -281,7 +308,7 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<M3uPlaylist> {
 
                     // let length = meta[0].parse::<u32>()
                     //     .context("Unable to parse song runtime")?;
-                    
+
                     let path = lines.next().transpose()?;
                     if path.is_none() {
                         anyhow::bail!("Song filepath is missing");
@@ -300,7 +327,7 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<M3uPlaylist> {
                     let title = &line[colon + 1..];
                     playlist.title = title.to_owned();
                 }
-                _ => anyhow::bail!("Unknown M3U directive: {directive}")
+                _ => anyhow::bail!("Unknown M3U directive: {directive}"),
             }
         } else {
             // This is a data line
