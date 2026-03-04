@@ -1,4 +1,5 @@
 use egui::TextureHandle;
+use gstreamer::tags::Description;
 use redb::Database;
 use std::fs;
 use std::fs::File;
@@ -34,10 +35,12 @@ pub struct SongCardData {
 }
 
 impl Songs {
-    pub fn new(m3u_path: &PathBuf, db: &Database) -> Songs {
-        let playlist_entries = match read_m3u(m3u_path) {
-            Ok(entries) => entries,
-            Err(_) => return Songs { articles: vec![] },
+    pub fn new(m3u_path: &PathBuf, db: &Database) -> (Songs, Option<M3uPlaylistData>) {
+        let (metadata, playlist_entries) = match read_m3u(m3u_path) {
+            Ok((meta, entries)) => (meta, entries),
+            Err(_) => {
+                return (Songs { articles: vec![] }, None);
+            }
         };
         {
             let write_txn = db.begin_write().expect("Failed to begin write txn");
@@ -83,9 +86,12 @@ impl Songs {
             }
         });
 
-        Songs {
-            articles: Vec::from_iter(iter),
-        }
+        (
+            Songs {
+                articles: Vec::from_iter(iter),
+            },
+            metadata,
+        )
     }
 
     pub fn empty() -> Songs {
@@ -260,7 +266,14 @@ impl M3uPlaylist {
     }
 }
 
-pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<M3uPlaylist> {
+pub struct M3uPlaylistData {
+    pub title: String,
+    pub description: String,
+    pub cover_path: String,
+}
+
+pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<(Option<M3uPlaylistData>, M3uPlaylist)> {
+    println!("Reading m3u");
     let path = path.as_ref();
 
     let file = File::open(path)?;
@@ -277,7 +290,10 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<M3uPlaylist> {
         .unwrap_or(false);
 
     if !is_header {
-        eprintln!("playlist.rs@read_m3u: {} is not an M3U file.", path.to_string_lossy());
+        eprintln!(
+            "playlist.rs@read_m3u: {} is not an M3U file.",
+            path.to_string_lossy()
+        );
         anyhow::bail!("\"{}\" is not an M3U file.", path.to_string_lossy());
     }
     let mut pending_directives: Vec<String> = Vec::new();
@@ -286,7 +302,7 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<M3uPlaylist> {
         if line.is_empty() {
             continue;
         }
-        if line.starts_with("#PLAYLIST:"){
+        if line.starts_with("#PLAYLIST:") {
             playlist.title = line[10..line.len()].to_string();
         }
         if line.starts_with('#') {
@@ -298,8 +314,16 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<M3uPlaylist> {
             });
         }
     }
+    let mut metadata = Some(M3uPlaylistData {
+            title: playlist.title.clone(),
+            description: String::new(),
+            cover_path: String::new(),
+        });
+    if playlist.title.is_empty() {
+        metadata = None;
+    }
 
-    Ok(playlist)
+    Ok((metadata, playlist))
 }
 
 pub fn move_m3u_track(playlist: &mut M3uPlaylist, from: usize, to: usize) -> std::io::Result<()> {

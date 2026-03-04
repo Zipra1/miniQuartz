@@ -194,15 +194,21 @@ impl Default for TemplateApp {
                         let playlist = pending_updates.entry(PathBuf::from(path.clone())).or_insert_with(|| {
                             /* note cus this is kinda weird to read, this is setting playlist to the read M3uPlaylist. If the M3uPlaylist hasn't
                             been read yet, then it reads it and adds it to pending_updates. That way it can write all changes to a playlist at once */
-                            println!("Loading into cache: {:?}", path);
-                            read_m3u(&path).unwrap_or_else(|_| M3uPlaylist {
-                                title: String::new(),
-                                description: String::new(),
-                                cover_path: String::new(),
-                                entries: vec![PlaylistEntry{path:"playlists/playlist-1/color bars.mp3".to_string(), extra: None}],
-                                path: path,
-                                texture: None,
-                            })
+                            match read_m3u(&path) {
+                                Ok((_, m3u_playlist)) => m3u_playlist,
+                                
+                                Err(_) => M3uPlaylist {
+                                    title: String::new(),
+                                    description: String::new(),
+                                    cover_path: String::new(),
+                                    entries: vec![PlaylistEntry {
+                                        path: "playlists/playlist-1/color bars.mp3".to_string(),
+                                        extra: None,
+                                    }],
+                                    path: path.clone(),
+                                    texture: None,
+                                },
+                            }
                         });
                         match task {
                             M3uEditTask::Edit(data) => {
@@ -296,9 +302,12 @@ impl Default for TemplateApp {
             .build()
             .expect("Could not create playbin");
 
+        let (songs, _) = Songs::new(&std::path::PathBuf::from("./playlists/"), &shared_db);
+        let (queue, _) = Songs::new(&std::path::PathBuf::from("./playlists/"), &shared_db);
+
         Self {
-            songs: Songs::new(&std::path::PathBuf::from("./playlists/"), &shared_db),
-            queue: Songs::new(&std::path::PathBuf::from("queue.m3u"), &shared_db),
+            songs,
+            queue,
             row_height: None,
             col1_width: None,
             col2_width: None,
@@ -391,10 +400,11 @@ impl TemplateApp {
 
         if app.currently_selected_playlist_path.exists() {
             // Check bc user may have deleted folder
-            app.songs = Songs::new(
+            let (got_songs, _) = Songs::new(
                 &app.currently_selected_playlist_path,
                 &app.redb_metadata_cache,
             );
+            app.songs = got_songs;
         } else {
             app.currently_selected_playlist_name = Some("Playlist not found".to_owned());
         }
@@ -900,10 +910,17 @@ impl eframe::App for TemplateApp {
                             }
 
                             if response.clicked() {
-                                self.songs =
-                                    Songs::new( &self.playlists[i], &self.redb_metadata_cache);
-                                self.currently_selected_playlist_name =
+                                let(songs,playlist_data) = Songs::new( &self.playlists[i], &self.redb_metadata_cache);
+                                self.songs = songs;
+                                if playlist_data.is_some(){
+                                    println!("playlist data is some");
+                                    self.currently_selected_playlist_name = Some(playlist_data.unwrap().title);
+                                } else {
+                                    println!("playlist data is NOT some");
+                                    self.currently_selected_playlist_name =
                                     Some(playlist_name.to_string());
+                                }
+                                
                                 self.currently_selected_playlist_path =
                                     self.playlists[i].to_path_buf();
                                 ui.data_mut(|d| d.insert_temp(song_card_jump_trigger_id, true));
