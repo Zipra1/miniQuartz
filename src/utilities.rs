@@ -55,7 +55,7 @@ pub fn path_to_uri(path: std::path::PathBuf) -> String {
         .replace("\\\\?\\", "")
         .replace("\\", "/");
 
-    let uri = format!("file:///{}", cleaned_path);
+    let uri = format!("file:///{}", cleaned_path).replace("#","%23");
     uri
 }
 

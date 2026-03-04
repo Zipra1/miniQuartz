@@ -13,6 +13,7 @@ target_wasm
 .lycheecache
 
 playlists/playlist-1
+playlists/playlist-2
 cache/*
 *.m3u
 

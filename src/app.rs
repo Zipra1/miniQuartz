@@ -860,7 +860,7 @@ impl eframe::App for TemplateApp {
                     let mut drop_target_index = None;
 
                     if ui.selectable_label(false, "📁 Local Files").clicked() {
-                        let local_path = std::path::PathBuf::from("playlists/playlist-1"); // todo: make user configurable
+                        let local_path = std::path::PathBuf::from("playlists/playlist-2"); // todo: make user configurable
                         self.songs = Songs::new_from_folder(&local_path);
                         self.currently_selected_playlist_name = Some("Local Files".to_string());
                         self.currently_selected_playlist_path = local_path;
