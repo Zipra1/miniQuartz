@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use egui::{Context, Id, Ui};
 
 use crate::TemplateApp;
-use crate::app::{AddTrack, M3uEditTask, RemovePlaylist, RemoveTrack, load_metadata_if_needed};
+use crate::app::{
+    AddTrack, M3uEditTask, RemovePlaylist, RemoveTrack, SetDetailsPlaylist, load_metadata_if_needed,
+};
 use crate::playlist::{SongCardData, create_empty_m3u};
 use crate::playlist::{get_playlists, reset_playlist_ids};
 use crate::utilities::{path_to_string, path_to_string_name, show_error, to_base62};
@@ -132,7 +134,11 @@ pub fn delete_playlist_warning(app: &mut TemplateApp, ui: &mut egui::Ui) {
                         if let Err(e) =
                             app.m3u_sender
                                 .send(M3uEditTask::RemovePlaylist(RemovePlaylist {
-                                    file_path: app.playlist_to_delete.clone(),
+                                    file_path: path_to_string(
+                                        &app.playlist_to_delete
+                                            .clone()
+                                            .unwrap_or(PathBuf::from("")),
+                                    ),
                                 }))
                         {
                             eprintln!("Failed to add playlist deletion to queue: {}", e);
@@ -173,6 +179,7 @@ pub fn rename_playlist(app: &mut TemplateApp, ui: &mut egui::Ui) {
         ui.heading("Rename playlist");
         let mut text = app.rename_to.clone();
         ui.text_edit_singleline(&mut app.rename_to);
+        ui.text_edit_multiline(&mut app.description_to);
 
         ui.add_space(32.0);
 
@@ -209,10 +216,22 @@ pub fn rename_playlist(app: &mut TemplateApp, ui: &mut egui::Ui) {
                                                 error.to_string(),
                                                 path_to_string(&app.playlist_to_rename.as_ref().unwrap()),
                                                 text)
-                                    }
-                                    app.playlists = get_playlists("./playlists/").unwrap_or_default();
-                                    if set_current{
-                                        app.currently_selected_playlist_path = new_path;
+                                    } else {
+                                        // This might be causing duplicate playlists!
+                                        if let Err(e) = app.m3u_sender.send(M3uEditTask::SetDetails(SetDetailsPlaylist {
+                                            file_path: path_to_string(&new_path.clone()),
+                                            title: app.rename_to.clone(),
+                                            description: app.description_to.clone(),
+                                            cover_path: String::new(),
+                                        })) {
+                                            eprintln!("Failed to queue M3uEditTask: {}", e);
+                                        }
+                                        app.playlists = get_playlists("./playlists/").unwrap_or_default();
+                                        if set_current{
+                                            app.currently_selected_playlist_path = new_path;
+                                            app.currently_selected_playlist_name = Some(text[4..text.len()-4].to_string());
+                                            app.currently_selected_playlist_description = Some(app.description_to.clone());
+                                        }
                                     }
                                 }
                             }
@@ -266,7 +285,7 @@ pub fn draw_song_card(
         // TODO: Actual folder-space check
         load_metadata_if_needed(song, app.metadata_sender.clone());
         /* This is only being done ONCE per song, because load_metadata_if_needed is actually just for the cache.
-           The song cards themselves retrieve their data only from the cache. */
+        The song cards themselves retrieve their data only from the cache. */
     }
     song.load_texture_if_needed(ctx);
 

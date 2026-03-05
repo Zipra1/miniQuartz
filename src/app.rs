@@ -70,6 +70,8 @@ pub struct TemplateApp {
     pub playlists: Vec<PathBuf>,
 
     pub currently_selected_playlist_name: Option<String>,
+    pub currently_selected_playlist_description: Option<String>,
+    pub currently_selected_playlist_cover_path: Option<String>,
     pub currently_selected_playlist_path: PathBuf,
 
     pub now_playing: Option<PathBuf>,
@@ -105,6 +107,7 @@ pub struct TemplateApp {
     #[serde(skip)]
     pub playlist_to_rename: Option<PathBuf>,
     pub rename_to: String,
+    pub description_to: String,
     #[serde(skip)]
     pub m3u_sender: Sender<M3uEditTask>,
 
@@ -190,6 +193,7 @@ impl Default for TemplateApp {
                             M3uEditTask::Remove(data) => data.file_path.clone(),
                             M3uEditTask::Move(data) => data.file_path.clone(),
                             M3uEditTask::RemovePlaylist(_data) => "NOREAD".to_string(),
+                            M3uEditTask::SetDetails(data) => data.file_path.clone(),
                         };
                         let playlist = pending_updates.entry(PathBuf::from(path.clone())).or_insert_with(|| {
                             /* note cus this is kinda weird to read, this is setting playlist to the read M3uPlaylist. If the M3uPlaylist hasn't
@@ -213,33 +217,16 @@ impl Default for TemplateApp {
                         match task {
                             M3uEditTask::Edit(data) => {
                                 let uid = data.track_path.clone();
-                                //println!("{} = {}",uid,path_to_uri(PathBuf::from(data.track_path.clone())));
 
                                 if let Ok(encoded_bytes) = postcard::to_allocvec(&data) {
                                     if let Ok(write_txn) = db_for_worker.begin_write() {
                                         if let Ok(mut table) = write_txn.open_table(METADATA_TABLE)
                                         {
-                                            let _ = table.insert(uid.clone(), encoded_bytes.as_slice());
+                                            let _ = table.insert(uid, encoded_bytes.as_slice());
                                         }
                                         let _ = write_txn.commit();
                                     }
                                 }
-                                // Database writes are done one at a time instead of batched and written all at once. This should be changed.
-                                // println!(
-                                //     "Retrieved value: {}",
-                                //     get_metadata_from_redb(&db_for_worker, uid)
-                                //         .unwrap_or(EditTrack {
-                                //             playlist_path: "FAILED2".to_string(),
-                                //             track_path: "FAILED2".to_string(),
-                                //             index: 0,
-                                //             album: "FAILED2".to_string(),
-                                //             artist: "FAILED2".to_string(),
-                                //             cover: "FAILED2".to_string(),
-                                //             title: "FAILED2".to_string(),
-                                //             length_string: "FAILED2".to_string()
-                                //         })
-                                //         .title
-                                // );
                             }
                             M3uEditTask::Add(data) => {
                                 println!("{}", "Queued: Adding m3u track");
@@ -271,6 +258,13 @@ impl Default for TemplateApp {
                             }
                             M3uEditTask::RemovePlaylist(data) => {
                                 // auummm
+                            }
+                            M3uEditTask::SetDetails(data) => {
+                                playlist.title = data.title;
+                                playlist.description = data.description;
+                                playlist.cover_path = data.cover_path;
+                                need_write = true;
+                                urgent = true;
                             }
                         }
                     }
@@ -325,6 +319,8 @@ impl Default for TemplateApp {
             playlists: get_playlists("./playlists/").unwrap_or_default(),
 
             currently_selected_playlist_name: None,
+            currently_selected_playlist_description: None,
+            currently_selected_playlist_cover_path: None,
             currently_selected_playlist_path: std::path::PathBuf::from(""),
 
             now_playing: None,
@@ -363,6 +359,7 @@ impl Default for TemplateApp {
             rename_playlist_show: false,
             playlist_to_rename: None,
             rename_to: "Playlist Name".to_string(),
+            description_to: "Playlist Description".to_string(),
 
             m3u_sender: sender_m3u, // I love shitty naming schemes (>w< )↗
 
@@ -462,8 +459,16 @@ pub struct MoveTrack {
 }
 
 pub struct RemovePlaylist {
-    pub file_path: Option<PathBuf>,
+    pub file_path: String,
 }
+
+pub struct SetDetailsPlaylist {
+    pub file_path: String,
+    pub title: String,
+    pub description: String,
+    pub cover_path: String,
+}
+
 
 pub enum M3uEditTask {
     Edit(EditTrack),
@@ -471,6 +476,7 @@ pub enum M3uEditTask {
     Remove(RemoveTrack),
     Move(MoveTrack),
     RemovePlaylist(RemovePlaylist),
+    SetDetails(SetDetailsPlaylist),
 }
 
 // scared to move the multithreaded stuff to another file (～￣▽￣)～ but metadata stuff Should go somewhere else.
@@ -870,7 +876,7 @@ impl eframe::App for TemplateApp {
                     let mut drop_target_index = None;
 
                     if ui.selectable_label(false, "📁 Local Files").clicked() {
-                        let local_path = std::path::PathBuf::from("playlists/playlist-2"); // todo: make user configurable
+                        let local_path = std::path::PathBuf::from("playlists/playlist-1"); // todo: make user configurable
                         self.songs = Songs::new_from_folder(&local_path);
                         self.currently_selected_playlist_name = Some("Local Files".to_string());
                         self.currently_selected_playlist_path = local_path;
@@ -913,12 +919,12 @@ impl eframe::App for TemplateApp {
                                 let(songs,playlist_data) = Songs::new( &self.playlists[i], &self.redb_metadata_cache);
                                 self.songs = songs;
                                 if playlist_data.is_some(){
-                                    println!("playlist data is some");
-                                    self.currently_selected_playlist_name = Some(playlist_data.unwrap().title);
+                                    self.currently_selected_playlist_name = Some(playlist_data.clone().unwrap().title);
+                                    self.currently_selected_playlist_description = Some(playlist_data.unwrap().description);
                                 } else {
-                                    println!("playlist data is NOT some");
                                     self.currently_selected_playlist_name =
                                     Some(playlist_name.to_string());
+                                    self.currently_selected_playlist_description = None;
                                 }
                                 
                                 self.currently_selected_playlist_path =
@@ -1021,7 +1027,10 @@ impl eframe::App for TemplateApp {
                                 egui::Image::new(tex).max_width(30.0).corner_radius(3), // todo: this should be user configurable. some people haaate corner radius on album art
                             );
                         }*/
-                        ui.label(egui::RichText::new(playlist_name).size(32.0).strong());
+                        ui.vertical(|ui|{
+                            ui.label(egui::RichText::new(playlist_name).size(32.0).strong());
+                            ui.label(self.currently_selected_playlist_description.clone().unwrap_or(String::new()));
+                        });
                     });
                 });
             egui::TopBottomPanel::top("Resizables")

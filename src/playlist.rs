@@ -266,6 +266,7 @@ impl M3uPlaylist {
     }
 }
 
+#[derive(Clone)]
 pub struct M3uPlaylistData {
     pub title: String,
     pub description: String,
@@ -304,6 +305,11 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<(Option<M3uPlaylistDa
         }
         if line.starts_with("#PLAYLIST:") {
             playlist.title = line[10..line.len()].to_string();
+            continue;
+        }
+        if line.starts_with("#PLAYLISTD:") {
+            playlist.description = line[11..line.len()].to_string();
+            continue;
         }
         if line.starts_with('#') {
             pending_directives.push(line);
@@ -316,7 +322,7 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<(Option<M3uPlaylistDa
     }
     let mut metadata = Some(M3uPlaylistData {
             title: playlist.title.clone(),
-            description: String::new(),
+            description: playlist.description.clone(),
             cover_path: String::new(),
         });
     if playlist.title.is_empty() {
@@ -374,7 +380,9 @@ pub fn write_m3u<P: AsRef<Path>>(
     }
 
     if write_header {
-        writeln!(file, "#EXTM3U")?;
+        writeln!(file, "{}", M3U_HEADER)?;
+        let _ = writeln!(file, "#PLAYLIST:{}",playlist.title);
+        let _ = writeln!(file, "#PLAYLISTD:{}",playlist.description);
     }
 
     for entry in &playlist.entries {
