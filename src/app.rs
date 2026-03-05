@@ -877,7 +877,7 @@ impl eframe::App for TemplateApp {
 
                     if ui.selectable_label(false, "📁 Local Files").clicked() {
                         let local_path = std::path::PathBuf::from("playlists/playlist-1"); // todo: make user configurable
-                        self.songs = Songs::new_from_folder(&local_path);
+                        self.songs = Songs::new_from_folder(&local_path, &self.redb_metadata_cache);
                         self.currently_selected_playlist_name = Some("Local Files".to_string());
                         self.currently_selected_playlist_path = local_path;
                         ui.data_mut(|d| d.insert_temp(song_card_jump_trigger_id, true));
@@ -1050,13 +1050,27 @@ impl eframe::App for TemplateApp {
                             .max_height(ui.available_height())
                             .with_stroke(false)
                             .show(ui, |ui| {
-                                ui.label("Title");
+                                if ui.add(egui::Button::new("Title").frame(false)).clicked() {
+                                    println!("Sorting by title");
+                                    self.songs.sort(SongsSortBy::Title);
+                                    self.songs.sorted_by = SongsSortBy::Title;
+                                }
+                                if self.songs.sorted_by == SongsSortBy::Title {
+                                    ui.label("🔽");
+                                }
                                 self.title_header_width = ui.available_width();
                             });
 
                         ui.separator();
 
-                        ui.label("Album");
+                        if ui.add(egui::Button::new("Album").frame(false)).clicked() {
+                                    println!("Sorting by album");
+                                    self.songs.sort(SongsSortBy::Album);
+                                    self.songs.sorted_by = SongsSortBy::Album;
+                                }
+                        if self.songs.sorted_by == SongsSortBy::Album {
+                            ui.label("🔽");
+                        }
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.add_space(17.0);

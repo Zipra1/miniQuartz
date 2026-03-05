@@ -17,6 +17,28 @@ const M3U_HEADER: &'static str = "#EXTM3U";
 /// Song management & organization
 pub struct Songs {
     pub articles: Vec<SongCardData>,
+    pub sorted_by: SongsSortBy,
+}
+
+#[derive(PartialEq)]
+pub enum SongsSortBy {
+    Title,
+    Artist,
+    Album,
+    Length,
+    Custom,
+}
+
+impl Songs {
+    pub fn sort(&mut self, criterion: SongsSortBy) {
+        match criterion {
+            SongsSortBy::Title => self.articles.sort_by_key(|s| s.title.to_lowercase()),
+            SongsSortBy::Artist => self.articles.sort_by_key(|s| s.artist.to_lowercase()),
+            SongsSortBy::Album => self.articles.sort_by_key(|s| s.album.to_lowercase()),
+            SongsSortBy::Length => self.articles.sort_by_key(|s| s.length_string.clone()),
+            SongsSortBy::Custom => { },
+        }
+    }
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize, PartialEq)] // This is so serde knows wat 2 do. Using serde here to store the last playing song
@@ -39,7 +61,7 @@ impl Songs {
         let (metadata, playlist_entries) = match read_m3u(m3u_path) {
             Ok((meta, entries)) => (meta, entries),
             Err(_) => {
-                return (Songs { articles: vec![] }, None);
+                return (Songs { articles: vec![], sorted_by: SongsSortBy::Custom }, None);
             }
         };
         {
@@ -65,8 +87,8 @@ impl Songs {
                     playlist_path: "FAILED".to_string(),
                     track_path: "FAILED".to_string(),
                     index: 0,
-                    album: "FAILED".to_string(),
-                    artist: "FAILED".to_string(),
+                    album: "Unknown Album(1)".to_string(),
+                    artist: "Unknown Artist(1)".to_string(),
                     cover: "FAILED".to_string(),
                     title: "FAILED".to_string(),
                     length_string: "FAILED".to_string(),
@@ -89,6 +111,7 @@ impl Songs {
         (
             Songs {
                 articles: Vec::from_iter(iter),
+                sorted_by: SongsSortBy::Custom,
             },
             metadata,
         )
@@ -97,11 +120,24 @@ impl Songs {
     pub fn empty() -> Songs {
         Songs {
             articles: Vec::new(),
+            sorted_by: SongsSortBy::Custom,
         }
     }
 
-    pub fn new_from_folder(folder_path: &Path) -> Songs {
+    pub fn new_from_folder(folder_path: &Path, db: &Database) -> Songs {
         let audio_extensions = ["mp3", "wav", "ogg", "flac", "m4a"];
+
+        {
+            let write_txn = db.begin_write().expect("Failed to begin write txn");
+            let _ = write_txn
+                .open_table(METADATA_TABLE)
+                .expect("Failed to initialize table");
+            write_txn.commit().expect("Failed to commit table creation");
+        }
+        let read_txn = db.begin_read().expect("Failed to begin read txn");
+        let table = read_txn
+            .open_table(METADATA_TABLE)
+            .expect("Failed to open table");
 
         let iter = fs::read_dir(folder_path)
             .into_iter() // Handle potential errors reading the folder
@@ -122,12 +158,29 @@ impl Songs {
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "Unknown Track".to_string()); // unwrap_or_else probably not needed here, every file has a name right?
 
+                let uid = path_to_string(&path);
+                let metadata = table
+                    .get(uid)
+                    .ok()
+                    .flatten()
+                    .and_then(|val| postcard::from_bytes(val.value()).ok())
+                    .unwrap_or(EditTrack {
+                        playlist_path: "MREAOOWW".to_string(),
+                        track_path: "MEOOWW".to_string(),
+                        index: 0,
+                        album: "Unknown Album".to_string(),
+                        artist: "Unknown Artist".to_string(),
+                        cover: "".to_string(),
+                        title: file_name,
+                        length_string: "--:--".to_string(),
+                    });
+
                 SongCardData {
-                    title: file_name,
-                    artist: "Unknown Artist(2)".to_owned(),
-                    album: "Unknown Album".to_owned(),
-                    length_string: "--:--".to_owned(),
-                    cover_path: "".to_owned(),
+                    title: metadata.title,
+                    artist: metadata.artist,
+                    album: metadata.album,
+                    length_string: metadata.length_string,
+                    cover_path: metadata.cover,
                     path: path.clone(),
                     texture: None,
                     playing: false,
@@ -137,6 +190,7 @@ impl Songs {
             });
         Songs {
             articles: Vec::from_iter(iter),
+            sorted_by: SongsSortBy::Custom,
         }
     }
 }
@@ -321,10 +375,10 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<(Option<M3uPlaylistDa
         }
     }
     let mut metadata = Some(M3uPlaylistData {
-            title: playlist.title.clone(),
-            description: playlist.description.clone(),
-            cover_path: String::new(),
-        });
+        title: playlist.title.clone(),
+        description: playlist.description.clone(),
+        cover_path: String::new(),
+    });
     if playlist.title.is_empty() {
         metadata = None;
     }
@@ -381,8 +435,8 @@ pub fn write_m3u<P: AsRef<Path>>(
 
     if write_header {
         writeln!(file, "{}", M3U_HEADER)?;
-        let _ = writeln!(file, "#PLAYLIST:{}",playlist.title);
-        let _ = writeln!(file, "#PLAYLISTD:{}",playlist.description);
+        let _ = writeln!(file, "#PLAYLIST:{}", playlist.title);
+        let _ = writeln!(file, "#PLAYLISTD:{}", playlist.description);
     }
 
     for entry in &playlist.entries {
