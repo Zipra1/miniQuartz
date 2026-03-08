@@ -376,6 +376,56 @@ pub fn read_m3u<P: AsRef<Path>>(path: P) -> anyhow::Result<(Option<M3uPlaylistDa
     Ok((metadata, playlist))
 }
 
+pub fn read_m3u_info<P: AsRef<Path>>(path: P) -> anyhow::Result<(M3uPlaylistData)> {
+    println!("Reading m3u (metadata only)");
+    let path = path.as_ref();
+
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+
+    let mut playlist = M3uPlaylist::new();
+
+    // Verify that this file is actually an M3U file
+    let is_header = lines
+        .next()
+        .transpose()?
+        .map(|header| header == M3U_HEADER)
+        .unwrap_or(false);
+
+    if !is_header {
+        eprintln!(
+            "playlist.rs@read_m3u_info: {} is not an M3U file.",
+            path.to_string_lossy()
+        );
+        anyhow::bail!("\"{}\" is not an M3U file.", path.to_string_lossy());
+    }
+    while let Some(line) = lines.next() {
+        let line = line?;
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with("#PLAYLIST:") {
+            playlist.title = line[10..line.len()].to_string();
+            continue;
+        }
+        if line.starts_with("#PLAYLISTD:") {
+            playlist.description = line[11..line.len()].to_string();
+            continue;
+        }
+        if line.starts_with('#') {
+        } else {
+            break;
+        }
+    }
+    let metadata = M3uPlaylistData {
+        title: playlist.title.clone(),
+        description: playlist.description.clone(),
+        cover_path: String::new(),
+    };
+    Ok(metadata)
+}
+
 pub fn move_m3u_track(playlist: &mut M3uPlaylist, from: usize, to: usize) -> std::io::Result<()> {
     if playlist.entries.len() <= from {
         eprintln!(

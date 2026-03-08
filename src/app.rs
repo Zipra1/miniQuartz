@@ -260,7 +260,9 @@ impl Default for TemplateApp {
                                         }
                                     }
                                     M3uEditTask::RemovePlaylist(data) => {
-                                        // auummm
+                                        // auummm.. hgm.... o((>ω< ))o
+                                        // maybe there should be a remove playlist function that sends to this and does the file operation itself
+                                        // and then this could just remove the target playlist from pending_updates
                                     }
                                     M3uEditTask::SetDetails(data) => {
                                         println!("M3uEditTask: file path for setdetails:{}", path);

@@ -6,7 +6,7 @@ use crate::TemplateApp;
 use crate::app::{
     AddTrack, M3uEditTask, RemovePlaylist, RemoveTrack, SetDetailsPlaylist, load_metadata_if_needed,
 };
-use crate::playlist::{SongCardData, create_empty_m3u};
+use crate::playlist::{M3uPlaylistData, SongCardData, create_empty_m3u, read_m3u_info};
 use crate::playlist::{get_playlists, reset_playlist_ids};
 use crate::utilities::{path_to_string, path_to_string_name, show_error, to_base62};
 
@@ -92,6 +92,10 @@ pub fn right_click_playlist(app: &mut TemplateApp, ui: &mut egui::Ui, playlist_i
         app.playlist_to_rename = Some(playlist.to_path_buf());
         let name = &path_to_string_name(playlist)[4..];
         app.rename_to = name[..name.len() - 4].to_string();
+        app.description_to = match read_m3u_info(&app.playlists[playlist_index]){
+            Ok(data) => data.description,
+            Err(_e) => "".to_string(),
+        }
     }
     if ui.button("Delete playlist").clicked() {
         app.warning_show = true;
@@ -197,11 +201,6 @@ pub fn rename_playlist(app: &mut TemplateApp, ui: &mut egui::Ui) {
                     if let Some(old_path) = &app.playlist_to_rename{
                         if let Some(parent) = old_path.parent(){
                             let new_path = parent.join(&text);
-                            if old_path.exists(){
-                                println!("Old path exists");
-                            } else {
-                                eprintln!("OLD PATH DOES NOT EXIST! THIS ERROR SHOULD NEVER TRIGGER {}", path_to_string(&old_path.clone()))
-                            }
                             if &new_path != old_path{
                                 if new_path.try_exists().unwrap_or(false){
                                     show_error(app,format!("Playlist already exists! If you're seeing this, something went very wrong (✿uwu)\nold path: {} \nnew path: {}",path_to_string(old_path),path_to_string(&new_path)));
@@ -223,11 +222,6 @@ pub fn rename_playlist(app: &mut TemplateApp, ui: &mut egui::Ui) {
                                                 path_to_string(&app.playlist_to_rename.as_ref().unwrap()),
                                                 text)
                                     } else {
-                                        if old_path.exists(){
-                                            println!("OLD PATH EXISTS! THATS BAD IT SGHOULD BE GONE {}", path_to_string(&old_path.clone()));
-                                        } else {
-                                            eprintln!("Old path does not exist");
-                                        }
                                         // rename is synchronous, so it *should* be renamed by the time it gets here.
                                         // sometimes, it seems as though rename is just making a new file instead of renaming.
                                         // checking if old path exists returns true even when a duplicate happens
@@ -235,13 +229,15 @@ pub fn rename_playlist(app: &mut TemplateApp, ui: &mut egui::Ui) {
                                         // issue found: M3uEditTask stores a variable of all the playlists that need changing. This is what's storing the old playlist.
                                         // The issue actually lies in the Edit task since it adds to pending_updates, but never drains it.
                                         println!("New path: {}", path_to_string(&new_path.clone()));
-                                        if let Err(e) = app.m3u_sender.send(M3uEditTask::SetDetails(SetDetailsPlaylist {
-                                            file_path: path_to_string(&new_path.clone()),
-                                            title: app.rename_to.clone(),
-                                            description: app.description_to.clone(),
-                                            cover_path: String::new(),
-                                        })) {
-                                            eprintln!("Failed to queue M3uEditTask: {}", e);
+                                        if app.currently_selected_playlist_description.clone().unwrap_or(String::new()) != app.description_to{
+                                            if let Err(e) = app.m3u_sender.send(M3uEditTask::SetDetails(SetDetailsPlaylist {
+                                                file_path: path_to_string(&new_path.clone()),
+                                                title: app.rename_to.clone(),
+                                                description: app.description_to.clone(),
+                                                cover_path: String::new(),
+                                            })) {
+                                                eprintln!("Failed to queue M3uEditTask: {}", e);
+                                            }
                                         }
                                         app.playlists = get_playlists("./playlists/").unwrap_or_default();
                                         if set_current{
@@ -249,6 +245,20 @@ pub fn rename_playlist(app: &mut TemplateApp, ui: &mut egui::Ui) {
                                             app.currently_selected_playlist_name = Some(text[4..text.len()-4].to_string());
                                             app.currently_selected_playlist_description = Some(app.description_to.clone());
                                         }
+                                    }
+                                }
+                            } else {
+                                if app.currently_selected_playlist_description.clone().unwrap_or(String::new()) != app.description_to{
+                                    if let Err(e) = app.m3u_sender.send(M3uEditTask::SetDetails(SetDetailsPlaylist {
+                                            file_path: path_to_string(&new_path.clone()),
+                                            title: app.rename_to.clone(),
+                                            description: app.description_to.clone(),
+                                            cover_path: String::new(),
+                                        })) {
+                                            eprintln!("Failed to queue M3uEditTask: {}", e);
+                                    }
+                                    if set_current{
+                                        app.currently_selected_playlist_description = Some(app.description_to.clone());
                                     }
                                 }
                             }
