@@ -172,6 +172,7 @@ impl Default for TemplateApp {
         let (sender_m3u, receiver_m3u) = std::sync::mpsc::channel::<M3uEditTask>();
 
         let db = Database::create("cache/metadata.redb").expect("Failed to create redb database");
+        init_metadata_cache_redb(&db);
         let shared_db = Arc::new(db);
         let db_for_worker = shared_db.clone();
 
@@ -187,34 +188,7 @@ impl Default for TemplateApp {
                         time_since_task_added = std::time::Instant::now();
                         need_write = false;
                         urgent = false;
-                        let path = match &task {
-                            M3uEditTask::Edit(data) => data.playlist_path.clone(),
-                            M3uEditTask::Add(data) => data.file_path.clone(),
-                            M3uEditTask::Remove(data) => data.file_path.clone(),
-                            M3uEditTask::Move(data) => data.file_path.clone(),
-                            M3uEditTask::RemovePlaylist(_data) => "NOREAD".to_string(),
-                            M3uEditTask::SetDetails(data) => data.file_path.clone(),
-                        };
-                        let playlist = pending_updates.entry(PathBuf::from(path.clone())).or_insert_with(|| {
-                            /* note cus this is kinda weird to read, this is setting playlist to the read M3uPlaylist. If the M3uPlaylist hasn't
-                            been read yet, then it reads it and adds it to pending_updates. That way it can write all changes to a playlist at once */
-                            match read_m3u(&path) {
-                                Ok((_, m3u_playlist)) => m3u_playlist,
-                                
-                                Err(_) => M3uPlaylist {
-                                    title: String::new(),
-                                    description: String::new(),
-                                    cover_path: String::new(),
-                                    entries: vec![PlaylistEntry {
-                                        path: "playlists/playlist-1/color bars.mp3".to_string(),
-                                        extra: None,
-                                    }],
-                                    path: path.clone(),
-                                    texture: None,
-                                },
-                            }
-                        });
-                        match task {
+                        match &task {
                             M3uEditTask::Edit(data) => {
                                 let uid = data.track_path.clone();
 
@@ -227,46 +201,79 @@ impl Default for TemplateApp {
                                         let _ = write_txn.commit();
                                     }
                                 }
-                            }
-                            M3uEditTask::Add(data) => {
-                                println!("{}", "Queued: Adding m3u track");
-                                add_to_playlist(playlist, &data.new_song);
-                                time_since_task_added = std::time::Instant::now();
-                                need_write = true;
-                                urgent = true;
-                            }
-                            M3uEditTask::Remove(data) => {
-                                println!("{}", "Queued: Removing m3u track");
-                                if let Err(e) = remove_from_playlist(playlist, data.index_to_remove)
-                                {
-                                    eprintln!("Error removing m3u track: {}", e);
-                                } else {
-                                    time_since_task_added = std::time::Instant::now();
-                                    need_write = true;
-                                    urgent = true;
+                            },
+                            _=> {
+                                let path = match &task{
+                                    M3uEditTask::Add(data) => data.file_path.clone(),
+                                    M3uEditTask::Remove(data) => data.file_path.clone(),
+                                    M3uEditTask::Move(data) => data.file_path.clone(),
+                                    M3uEditTask::RemovePlaylist(_data) => "NOREAD".to_string(),
+                                    M3uEditTask::SetDetails(data) => data.file_path.clone(),
+                                    _ => continue,
+                                };
+                                let playlist = pending_updates.entry(PathBuf::from(path.clone())).or_insert_with(|| {
+                                    /* note cus this is kinda weird to read, this is setting playlist to the read M3uPlaylist. If the M3uPlaylist hasn't
+                                    been read yet, then it reads it and adds it to pending_updates. That way it can write all changes to a playlist at once */
+                                    match read_m3u(&path) {
+                                        Ok((_, m3u_playlist)) => m3u_playlist,
+                                        
+                                        Err(_) => M3uPlaylist {
+                                            title: String::new(),
+                                            description: String::new(),
+                                            cover_path: String::new(),
+                                            entries: vec![PlaylistEntry {
+                                                path: "playlists/playlist-1/color bars.mp3".to_string(),
+                                                extra: None,
+                                            }],
+                                            path: path.clone(),
+                                            texture: None,
+                                        },
+                                    }
+                                });
+                                match task {
+                                    M3uEditTask::Add(data) => {
+                                        println!("{}", "Queued: Adding m3u track");
+                                        add_to_playlist(playlist, &data.new_song);
+                                        time_since_task_added = std::time::Instant::now();
+                                        need_write = true;
+                                        urgent = true;
+                                    }
+                                    M3uEditTask::Remove(data) => {
+                                        println!("{}", "Queued: Removing m3u track");
+                                        if let Err(e) = remove_from_playlist(playlist, data.index_to_remove)
+                                        {
+                                            eprintln!("Error removing m3u track: {}", e);
+                                        } else {
+                                            time_since_task_added = std::time::Instant::now();
+                                            need_write = true;
+                                            urgent = true;
+                                        }
+                                    }
+                                    M3uEditTask::Move(data) => {
+                                        println!("{}", "Queued: Moving m3u track");
+                                        if let Err(e) = move_m3u_track(playlist, data.from, data.to) {
+                                            eprintln!("Error moving m3u track: {}", e);
+                                        } else {
+                                            time_since_task_added = std::time::Instant::now();
+                                            need_write = true;
+                                            urgent = true;
+                                        }
+                                    }
+                                    M3uEditTask::RemovePlaylist(data) => {
+                                        // auummm
+                                    }
+                                    M3uEditTask::SetDetails(data) => {
+                                        println!("M3uEditTask: file path for setdetails:{}", path);
+                                        playlist.title = data.title;
+                                        playlist.description = data.description;
+                                        playlist.cover_path = data.cover_path;
+                                        need_write = true;
+                                        urgent = true;
+                                    }
+                                    _ => {}
                                 }
-                            }
-                            M3uEditTask::Move(data) => {
-                                println!("{}", "Queued: Moving m3u track");
-                                if let Err(e) = move_m3u_track(playlist, data.from, data.to) {
-                                    eprintln!("Error moving m3u track: {}", e);
-                                } else {
-                                    time_since_task_added = std::time::Instant::now();
-                                    need_write = true;
-                                    urgent = true;
-                                }
-                            }
-                            M3uEditTask::RemovePlaylist(data) => {
-                                // auummm
-                            }
-                            M3uEditTask::SetDetails(data) => {
-                                playlist.title = data.title;
-                                playlist.description = data.description;
-                                playlist.cover_path = data.cover_path;
-                                need_write = true;
-                                urgent = true;
-                            }
-                        }
+                            },
+                        };
                     }
                     Err(_) => {
                         // timeout. the check to write to m3u might belong here
@@ -282,10 +289,10 @@ impl Default for TemplateApp {
                     urgent = false;
                     for (path, playlist) in pending_updates.drain() {
                         // todo: path should be part of M3uPlaylist
-                        if let Err(e) = write_m3u(path, &playlist, true, false, true) {
+                        if let Err(e) = write_m3u(&path, &playlist, true, false, true) {
                             eprintln!("M3uEditTasks: Error writing m3u: {}", e);
                         } else {
-                            println!("M3uEditTasks: Successfully wrote m3u");
+                            println!("M3uEditTasks: Successfully wrote m3u:{}", path_to_string(&path.clone()));
                         }
                     }
                 }
@@ -1129,7 +1136,6 @@ impl eframe::App for TemplateApp {
                             .iter_mut()
                             .enumerate()
                             .filter(|(_, s)| s.path == result.path)
-                        //.take(1)
                         {
                             // This if statement is here because in the event of duplicate songs this would be run n^2 times, n being the number of duplicate songs in a playlist.
                             if !self.loaded_paths.contains(&result.path)

@@ -1,5 +1,4 @@
 use egui::TextureHandle;
-use gstreamer::tags::Description;
 use redb::Database;
 use std::fs;
 use std::fs::File;
@@ -9,7 +8,9 @@ use walkdir::WalkDir;
 
 use crate::TemplateApp;
 use crate::app::{EditTrack, METADATA_TABLE};
-use crate::utilities::{path_to_string, path_to_string_name, show_error, to_base62};
+use crate::utilities::{
+    get_metadata_from_redb, path_to_string, path_to_string_name, show_error, to_base62
+};
 
 const M3U_HEADER: &'static str = "#EXTM3U";
 
@@ -36,7 +37,7 @@ impl Songs {
             SongsSortBy::Artist => self.articles.sort_by_key(|s| s.artist.to_lowercase()),
             SongsSortBy::Album => self.articles.sort_by_key(|s| s.album.to_lowercase()),
             SongsSortBy::Length => self.articles.sort_by_key(|s| s.length_string.clone()),
-            SongsSortBy::Custom => { },
+            SongsSortBy::Custom => {}
         }
     }
 }
@@ -61,38 +62,27 @@ impl Songs {
         let (metadata, playlist_entries) = match read_m3u(m3u_path) {
             Ok((meta, entries)) => (meta, entries),
             Err(_) => {
-                return (Songs { articles: vec![], sorted_by: SongsSortBy::Custom }, None);
+                return (
+                    Songs {
+                        articles: vec![],
+                        sorted_by: SongsSortBy::Custom,
+                    },
+                    None,
+                );
             }
         };
-        {
-            let write_txn = db.begin_write().expect("Failed to begin write txn");
-            let _ = write_txn
-                .open_table(METADATA_TABLE)
-                .expect("Failed to initialize table");
-            write_txn.commit().expect("Failed to commit table creation");
-        }
-        let read_txn = db.begin_read().expect("Failed to begin read txn");
-        let table = read_txn
-            .open_table(METADATA_TABLE)
-            .expect("Failed to open table");
-
         let iter = playlist_entries.into_iter().map(|entry| {
-            let uid = &entry.path;
-            let metadata = table
-                .get(uid)
-                .ok()
-                .flatten()
-                .and_then(|val| postcard::from_bytes(val.value()).ok())
-                .unwrap_or(EditTrack {
-                    playlist_path: "FAILED".to_string(),
-                    track_path: "FAILED".to_string(),
-                    index: 0,
-                    album: "Unknown Album(1)".to_string(),
-                    artist: "Unknown Artist(1)".to_string(),
-                    cover: "FAILED".to_string(),
-                    title: "FAILED".to_string(),
-                    length_string: "FAILED".to_string(),
-                });
+            let uid = entry.path.clone();
+            let metadata = get_metadata_from_redb(db, uid).unwrap_or(EditTrack {
+                playlist_path: "FAILED".to_string(),
+                track_path: "FAILED".to_string(),
+                index: 0,
+                album: "Unknown Album(1)".to_string(),
+                artist: "Unknown Artist(1)".to_string(),
+                cover: "FAILED".to_string(),
+                title: "FAILED".to_string(),
+                length_string: "FAILED".to_string(),
+            });
 
             SongCardData {
                 title: metadata.title,

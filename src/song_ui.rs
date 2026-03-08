@@ -197,11 +197,17 @@ pub fn rename_playlist(app: &mut TemplateApp, ui: &mut egui::Ui) {
                     if let Some(old_path) = &app.playlist_to_rename{
                         if let Some(parent) = old_path.parent(){
                             let new_path = parent.join(&text);
+                            if old_path.exists(){
+                                println!("Old path exists");
+                            } else {
+                                eprintln!("OLD PATH DOES NOT EXIST! THIS ERROR SHOULD NEVER TRIGGER {}", path_to_string(&old_path.clone()))
+                            }
                             if &new_path != old_path{
                                 if new_path.try_exists().unwrap_or(false){
                                     show_error(app,format!("Playlist already exists! If you're seeing this, something went very wrong (✿uwu)\nold path: {} \nnew path: {}",path_to_string(old_path),path_to_string(&new_path)));
                                     eprintln!("{}","Playlist already exists?".to_string());
                                 }else{
+                                    println!("Attempting rename from {:?} to {:?}", path_to_string(&old_path.clone()), path_to_string(&new_path.clone()));
                                     if let Err(error) = std::fs::rename(app.playlist_to_rename.as_ref().unwrap(), &new_path) {
                                         show_error(
                                             app,
@@ -217,7 +223,18 @@ pub fn rename_playlist(app: &mut TemplateApp, ui: &mut egui::Ui) {
                                                 path_to_string(&app.playlist_to_rename.as_ref().unwrap()),
                                                 text)
                                     } else {
-                                        // This might be causing duplicate playlists!
+                                        if old_path.exists(){
+                                            println!("OLD PATH EXISTS! THATS BAD IT SGHOULD BE GONE {}", path_to_string(&old_path.clone()));
+                                        } else {
+                                            eprintln!("Old path does not exist");
+                                        }
+                                        // rename is synchronous, so it *should* be renamed by the time it gets here.
+                                        // sometimes, it seems as though rename is just making a new file instead of renaming.
+                                        // checking if old path exists returns true even when a duplicate happens
+                                        // checking if old path exists *after* renaming returns false even when a duplicate happens, therefore it's happening at the M3uEditTask. but why??
+                                        // issue found: M3uEditTask stores a variable of all the playlists that need changing. This is what's storing the old playlist.
+                                        // The issue actually lies in the Edit task since it adds to pending_updates, but never drains it.
+                                        println!("New path: {}", path_to_string(&new_path.clone()));
                                         if let Err(e) = app.m3u_sender.send(M3uEditTask::SetDetails(SetDetailsPlaylist {
                                             file_path: path_to_string(&new_path.clone()),
                                             title: app.rename_to.clone(),

@@ -55,8 +55,31 @@ pub fn path_to_uri(path: std::path::PathBuf) -> String {
         .replace("\\\\?\\", "")
         .replace("\\", "/");
 
-    let uri = format!("file:///{}", cleaned_path).replace("#","%23");
+    let uri = format!("file:///{}", cleaned_path).replace("#", "%23");
     uri
+}
+
+pub fn init_metadata_cache_redb(db: &Database) {
+    println!("Checking for database init");
+    let table_exists = {
+        let read_txn = db.begin_read().expect("Failed to begin read txn");
+        match read_txn.open_table(METADATA_TABLE) {
+            Ok(_) => true,
+            Err(redb::TableError::TableDoesNotExist(_)) => false,
+            Err(e) => panic!("Unexpected database error: {:?}", e),
+        }
+    };
+
+    if !table_exists {
+        println!("Database not initialized. Initializing now");
+        let write_txn = db.begin_write().expect("Failed to begin write txn");
+        {
+            let _ = write_txn
+                .open_table(METADATA_TABLE)
+                .expect("Failed to initialize table");
+        }
+        write_txn.commit().expect("Failed to commit table creation");
+    }
 }
 
 pub fn get_metadata_from_redb(db: &Database, uid: String) -> Option<EditTrack> {
